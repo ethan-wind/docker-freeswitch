@@ -48,8 +48,6 @@ This is the modules.conf.xml file in the image which dictates which modules get 
     <load module="mod_logfile"/>
     <!-- <load module="mod_syslog"/> -->
 
-    <load module="mod_audio_fork"/>
-
     <!--<load module="mod_yaml"/>-->
 
     <!-- Multi-Faceted -->
