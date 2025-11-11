@@ -46,10 +46,12 @@ RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
 
 FROM base AS base-cmake
 WORKDIR /usr/local/src
+ARG TARGETARCH
 RUN export CMAKE_VERSION=$CMAKE_VERSION \
-    && wget https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.sh \
-    && chmod +x cmake-${CMAKE_VERSION}-linux-x86_64.sh \
-    && ./cmake-${CMAKE_VERSION}-linux-x86_64.sh --skip-license --prefix=/usr/local \
+    && ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "aarch64" || echo "x86_64") \
+    && wget --no-check-certificate https://cmake.org/files/v${CMAKE_VERSION%.*}/cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
+    && chmod +x cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
+    && ./cmake-${CMAKE_VERSION}-linux-${ARCH}.sh --skip-license --prefix=/usr/local \
     && rm -f cmake-${CMAKE_VERSION}-linux-x86_64.sh \
     && cmake --version
 
