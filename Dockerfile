@@ -24,6 +24,8 @@ RUN echo "SOFIA_VERSION=$SOFIA_VERSION"
 RUN echo "FREESWITCH_VERSION=$FREESWITCH_VERSION"
 
 RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
+    && sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
+    && sed -i 's/security.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
     && apt-get update && apt-get -y --quiet --allow-remove-essential upgrade \
     && apt-get install -y --quiet --no-install-recommends \
     python-is-python3 lsof gcc g++ make build-essential git autoconf automake default-mysql-client redis-tools \
@@ -236,7 +238,9 @@ COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
 COPY --from=freeswitch /usr/local/bin/ /usr/local/bin/
 COPY --from=freeswitch /usr/local/lib/ /usr/local/lib/
 COPY --from=freeswitch $LIB_DIR/ /usr/lib/
-RUN apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 \
+RUN sed -i 's/deb.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
+    && sed -i 's/security.debian.org/mirrors.ustc.edu.cn/g' /etc/apt/sources.list \
+    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
