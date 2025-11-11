@@ -4,23 +4,23 @@ ARG BUILD_CPUS=1
 
 ## # this will be populated from the vaule in .env file
 ARG CMAKE_VERSION 
-ARG GRPC_VERSION
+# ARG GRPC_VERSION
 ARG LIBWEBSOCKETS_VERSION
-ARG SPEECH_SDK_VERSION
+# ARG SPEECH_SDK_VERSION
 ARG SPANDSP_VERSION
 ARG SOFIA_VERSION
-ARG AWS_SDK_CPP_VERSION
-ARG FREESWITCH_MODULES_VERSION
+# ARG AWS_SDK_CPP_VERSION
+# ARG FREESWITCH_MODULES_VERSION
 ARG FREESWITCH_VERSION
 
 RUN echo "CMAKE_VERSION=$CMAKE_VERSION"
-RUN echo "GRPC_VERSION=$GRPC_VERSION"
+# RUN echo "GRPC_VERSION=$GRPC_VERSION"
 RUN echo "LIBWEBSOCKETS_VERSION=$LIBWEBSOCKETS_VERSION"
-RUN echo "SPEECH_SDK_VERSION=$SPEECH_SDK_VERSION"
+# RUN echo "SPEECH_SDK_VERSION=$SPEECH_SDK_VERSION"
 RUN echo "SPANDSP_VERSION=$SPANDSP_VERSION"
 RUN echo "SOFIA_VERSION=$SOFIA_VERSION"
-RUN echo "AWS_SDK_CPP_VERSION=$AWS_SDK_CPP_VERSION"
-RUN echo "FREESWITCH_MODULES_VERSION=$FREESWITCH_MODULES_VERSION"
+# RUN echo "AWS_SDK_CPP_VERSION=$AWS_SDK_CPP_VERSION"
+# RUN echo "FREESWITCH_MODULES_VERSION=$FREESWITCH_MODULES_VERSION"
 RUN echo "FREESWITCH_VERSION=$FREESWITCH_VERSION"
 
 RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
@@ -47,51 +47,51 @@ RUN export CMAKE_VERSION=$CMAKE_VERSION \
     && rm -f cmake-${CMAKE_VERSION}-linux-x86_64.sh \
     && cmake --version
 
-FROM base-cmake AS grpc
-WORKDIR /usr/local/src
-RUN git clone --depth 1 -b v$GRPC_VERSION https://github.com/grpc/grpc && cd grpc \
-    && git submodule update --init --recursive
-RUN cd grpc \
-    && mkdir -p cmake/build \
-    && cd cmake/build \
-    && cmake -DBUILD_SHARED_LIBS=ON -DgRPC_SSL_PROVIDER=package -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo ../.. \
-    && make -j ${BUILD_CPUS} \
-    && make install
-RUN ldconfig /usr/local/lib
+# FROM base-cmake AS grpc
+# WORKDIR /usr/local/src
+# RUN git clone --depth 1 -b v$GRPC_VERSION https://github.com/grpc/grpc && cd grpc \
+#    && git submodule update --init --recursive
+# RUN cd grpc \
+#     && mkdir -p cmake/build \
+#     && cd cmake/build \
+#     && cmake -DBUILD_SHARED_LIBS=ON -DgRPC_SSL_PROVIDER=package -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo ../.. \
+#     && make -j ${BUILD_CPUS} \
+#     && make install
+# RUN ldconfig /usr/local/lib
 
-FROM grpc AS grpc-googleapis
-WORKDIR /usr/local/src
-RUN git clone https://github.com/googleapis/googleapis && cd googleapis && git checkout d81d0b9e6993d6ab425dff4d7c3d05fb2e59fa57 \
-    && LANGUAGE=cpp make -j ${BUILD_CPUS}
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# FROM grpc AS grpc-googleapis
+# WORKDIR /usr/local/src
+# RUN git clone https://github.com/googleapis/googleapis && cd googleapis && git checkout d81d0b9e6993d6ab425dff4d7c3d05fb2e59fa57 \
+#     && LANGUAGE=cpp make -j ${BUILD_CPUS}
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 
-FROM grpc-googleapis AS nuance-asr-grpc-api
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 -b main https://github.com/drachtio/nuance-asr-grpc-api.git \
-    && cd nuance-asr-grpc-api \
-    && LANGUAGE=cpp make
+# FROM grpc-googleapis AS nuance-asr-grpc-api
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 -b main https://github.com/drachtio/nuance-asr-grpc-api.git \
+#     && cd nuance-asr-grpc-api \
+#     && LANGUAGE=cpp make
 
-FROM grpc-googleapis AS riva-asr-grpc-api
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 -b main https://github.com/drachtio/riva-asr-grpc-api.git \
-    && cd riva-asr-grpc-api \
-    && LANGUAGE=cpp make
+# FROM grpc-googleapis AS riva-asr-grpc-api
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 -b main https://github.com/drachtio/riva-asr-grpc-api.git \
+#     && cd riva-asr-grpc-api \
+#    && LANGUAGE=cpp make
 
-FROM grpc-googleapis AS soniox-asr-grpc-api
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 -b main https://github.com/drachtio/soniox-asr-grpc-api.git \
-    && cd soniox-asr-grpc-api \
-    && LANGUAGE=cpp make
+# FROM grpc-googleapis AS soniox-asr-grpc-api
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 -b main https://github.com/drachtio/soniox-asr-grpc-api.git \
+#     && cd soniox-asr-grpc-api \
+#     && LANGUAGE=cpp make
 
-FROM grpc-googleapis AS cobalt-asr-grpc-api
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 -b main https://github.com/drachtio/cobalt-asr-grpc-api.git \
-    && cd cobalt-asr-grpc-api \
-    && LANGUAGE=cpp make
+# FROM grpc-googleapis AS cobalt-asr-grpc-api
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 -b main https://github.com/drachtio/cobalt-asr-grpc-api.git \
+#     && cd cobalt-asr-grpc-api \
+#     && LANGUAGE=cpp make
         
 FROM base-cmake AS websockets
 WORKDIR /usr/local/src
@@ -100,20 +100,20 @@ RUN git clone --depth 1 -b v$LIBWEBSOCKETS_VERSION https://github.com/warmcat/li
     && cd /usr/local/src/libwebsockets \
     && mkdir -p build && cd build && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo && make && make install
 
-FROM base AS speechsdk
-COPY ./files/SpeechSDK-Linux-$SPEECH_SDK_VERSION.tar.gz /tmp/
-WORKDIR /tmp
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN tar xvfz SpeechSDK-Linux-$SPEECH_SDK_VERSION.tar.gz \
-    && cd SpeechSDK-Linux-$SPEECH_SDK_VERSION \
-    && cp -r include /usr/local/include/MicrosoftSpeechSDK \
-    && cp -r lib/ /usr/local/lib/MicrosoftSpeechSDK \
-    && cp /usr/local/lib/MicrosoftSpeechSDK/x64/libMicrosoft.*.so /usr/local/lib/ \
-    && ls -lrt /usr/local/lib/
+# FROM base AS speechsdk
+# COPY ./files/SpeechSDK-Linux-$SPEECH_SDK_VERSION.tar.gz /tmp/
+# WORKDIR /tmp
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN tar xvfz SpeechSDK-Linux-$SPEECH_SDK_VERSION.tar.gz \
+#     && cd SpeechSDK-Linux-$SPEECH_SDK_VERSION \
+#     && cp -r include /usr/local/include/MicrosoftSpeechSDK \
+#    && cp -r lib/ /usr/local/lib/MicrosoftSpeechSDK \
+#     && cp /usr/local/lib/MicrosoftSpeechSDK/x64/libMicrosoft.*.so /usr/local/lib/ \
+#    && ls -lrt /usr/local/lib/
 
-FROM base AS freeswitch-modules
-WORKDIR /usr/local/src
-RUN git clone --depth 1 -b $FREESWITCH_MODULES_VERSION https://github.com/jambonz/freeswitch-modules.git
+# FROM base AS freeswitch-modules
+# WORKDIR /usr/local/src
+# RUN git clone --depth 1 -b $FREESWITCH_MODULES_VERSION https://github.com/jambonz/freeswitch-modules.git
 
 FROM base AS spandsp
 WORKDIR /usr/local/src
@@ -135,36 +135,36 @@ RUN git clone --depth 1 https://github.com/dpirch/libfvad.git \
     && cd libfvad \
     && autoreconf -i && ./configure && make -j ${BUILD_CPUS} && make install
 
-FROM base-cmake AS aws-sdk-cpp
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 -b $AWS_SDK_CPP_VERSION https://github.com/aws/aws-sdk-cpp.git \
-    && cd aws-sdk-cpp \
-    && git submodule update --init --recursive
-RUN cd /usr/local/src/aws-sdk-cpp \
-    && mkdir -p build && cd build \
-    && cmake .. -DBUILD_ONLY="lexv2-runtime;transcribestreaming" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull -Wno-error=deprecated-declarations -Wno-error=uninitialized -Wno-error=maybe-uninitialized" \
-    && make -j ${BUILD_CPUS} && make install \
-    && mkdir -p /usr/local/lib/pkgconfig \
-    && find /usr/local/src/aws-sdk-cpp/ -type f -name "*.pc" | xargs cp -t /usr/local/lib/pkgconfig/
+# FROM base-cmake AS aws-sdk-cpp
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 -b $AWS_SDK_CPP_VERSION https://github.com/aws/aws-sdk-cpp.git \
+#     && cd aws-sdk-cpp \
+#    && git submodule update --init --recursive
+# RUN cd /usr/local/src/aws-sdk-cpp \
+#     && mkdir -p build && cd build \
+#     && cmake .. -DBUILD_ONLY="lexv2-runtime;transcribestreaming" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=ON -DCMAKE_CXX_FLAGS="-Wno-unused-parameter -Wno-error=nonnull -Wno-error=deprecated-declarations -Wno-error=uninitialized -Wno-error=maybe-uninitialized" \
+#    && make -j ${BUILD_CPUS} && make install \
+#     && mkdir -p /usr/local/lib/pkgconfig \
+#     && find /usr/local/src/aws-sdk-cpp/ -type f -name "*.pc" | xargs cp -t /usr/local/lib/pkgconfig/
 
-FROM base-cmake AS aws-c-common
-WORKDIR /usr/local/src
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
-RUN git clone --depth 1 https://github.com/awslabs/aws-c-common.git \
-    && cd aws-c-common \
-    && mkdir -p build && cd build \
-    && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-Wno-unused-parameter" \
-    && make -j ${BUILD_CPUS} && make install
+# FROM base-cmake AS aws-c-common
+# WORKDIR /usr/local/src
+# ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+# RUN git clone --depth 1 https://github.com/awslabs/aws-c-common.git \
+#     && cd aws-c-common \
+#     && mkdir -p build && cd build \
+#     && cmake .. -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBUILD_SHARED_LIBS=OFF -DCMAKE_CXX_FLAGS="-Wno-unused-parameter" \
+#     && make -j ${BUILD_CPUS} && make install
 
 FROM base AS freeswitch
 COPY ./files/ /tmp/
-COPY --from=aws-c-common /usr/local/include/ /usr/local/include/
-COPY --from=aws-c-common /usr/local/lib/ /usr/local/lib/
-COPY --from=aws-sdk-cpp /usr/local/include/ /usr/local/include/
-COPY --from=aws-sdk-cpp /usr/local/lib/ /usr/local/lib/
-COPY --from=grpc /usr/local/include/ /usr/local/include/
-COPY --from=grpc /usr/local/lib/ /usr/local/lib/
+# COPY --from=aws-c-common /usr/local/include/ /usr/local/include/
+# COPY --from=aws-c-common /usr/local/lib/ /usr/local/lib/
+# COPY --from=aws-sdk-cpp /usr/local/include/ /usr/local/include/
+# COPY --from=aws-sdk-cpp /usr/local/lib/ /usr/local/lib/
+# COPY --from=grpc /usr/local/include/ /usr/local/include/
+# COPY --from=grpc /usr/local/lib/ /usr/local/lib/
 COPY --from=libfvad /usr/local/include/ /usr/local/include/
 COPY --from=libfvad /usr/local/lib/ /usr/local/lib/
 COPY --from=sofia-sip /usr/local/bin/ /usr/local/bin/
@@ -173,19 +173,19 @@ COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
 COPY --from=sofia-sip /usr/local/share/sofia-sip/ /usr/local/share/sofia-sip/
 COPY --from=spandsp /usr/local/include/ /usr/local/include/
 COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
-COPY --from=speechsdk /usr/local/include/ /usr/local/include/
-COPY --from=speechsdk /usr/local/lib/ /usr/local/lib/
+# COPY --from=speechsdk /usr/local/include/ /usr/local/include/
+# COPY --from=speechsdk /usr/local/lib/ /usr/local/lib/
 COPY --from=websockets /usr/local/include/ /usr/local/include/
 COPY --from=websockets /usr/local/lib/ /usr/local/lib/
 WORKDIR /usr/local/src
 ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 RUN git clone --depth 1 -b v$FREESWITCH_VERSION https://github.com/signalwire/freeswitch.git
-COPY --from=freeswitch-modules /usr/local/src/freeswitch-modules/ /usr/local/src/freeswitch/src/mod/applications/
-COPY --from=nuance-asr-grpc-api /usr/local/src/nuance-asr-grpc-api /usr/local/src/freeswitch/libs/nuance-asr-grpc-api
-COPY --from=riva-asr-grpc-api /usr/local/src/riva-asr-grpc-api /usr/local/src/freeswitch/libs/riva-asr-grpc-api
-COPY --from=soniox-asr-grpc-api /usr/local/src/soniox-asr-grpc-api /usr/local/src/freeswitch/libs/soniox-asr-grpc-api
-COPY --from=cobalt-asr-grpc-api /usr/local/src/cobalt-asr-grpc-api /usr/local/src/freeswitch/libs/cobalt-asr-grpc-api
-COPY --from=grpc-googleapis /usr/local/src/googleapis /usr/local/src/freeswitch/libs/googleapis
+# COPY --from=freeswitch-modules /usr/local/src/freeswitch-modules/ /usr/local/src/freeswitch/src/mod/applications/
+# COPY --from=nuance-asr-grpc-api /usr/local/src/nuance-asr-grpc-api /usr/local/src/freeswitch/libs/nuance-asr-grpc-api
+# COPY --from=riva-asr-grpc-api /usr/local/src/riva-asr-grpc-api /usr/local/src/freeswitch/libs/riva-asr-grpc-api
+# COPY --from=soniox-asr-grpc-api /usr/local/src/soniox-asr-grpc-api /usr/local/src/freeswitch/libs/soniox-asr-grpc-api
+# COPY --from=cobalt-asr-grpc-api /usr/local/src/cobalt-asr-grpc-api /usr/local/src/freeswitch/libs/cobalt-asr-grpc-api
+# COPY --from=grpc-googleapis /usr/local/src/googleapis /usr/local/src/freeswitch/libs/googleapis
 RUN cp /tmp/configure.ac.extra /usr/local/src/freeswitch/configure.ac \
     && cp /tmp/Makefile.am.extra /usr/local/src/freeswitch/Makefile.am \
     && cp /tmp/ax_check_compile_flag.m4 /usr/local/src/freeswitch/ax_check_compile_flag.m4 \
