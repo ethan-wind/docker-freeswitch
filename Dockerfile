@@ -224,6 +224,21 @@ RUN cp /tmp/configure.ac.extra /usr/local/src/freeswitch/configure.ac \
 RUN cd /usr/local/src/freeswitch \
     && make -j ${BUILD_CPUS} \
     && make install
+
+FROM base-cmake AS mod-audio-stream
+COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
+WORKDIR /usr/local/src
+ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
+RUN git clone --depth 1 -b v1.0.3 https://github.com/amigniter/mod_audio_stream.git \
+    && cd mod_audio_stream \
+    && git submodule update --init --recursive \
+    && mkdir -p build && cd build \
+    && cmake -DCMAKE_BUILD_TYPE=Release .. \
+    && make -j ${BUILD_CPUS} \
+    && make install
+
+FROM freeswitch AS freeswitch-final
+COPY --from=mod-audio-stream /usr/local/freeswitch/mod/ /usr/local/freeswitch/mod/
 RUN cd /usr/local/src/freeswitch \
     && cp /tmp/acl.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/event_socket.conf.xml /usr/local/freeswitch/conf/autoload_configs \
@@ -239,10 +254,10 @@ RUN cd /usr/local/src/freeswitch \
 
 FROM debian:bullseye-slim AS final
 ARG TARGETARCH
-COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
-COPY --from=freeswitch /usr/local/bin/ /usr/local/bin/
-COPY --from=freeswitch /usr/local/lib/ /usr/local/lib/
-COPY --from=freeswitch /usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
+COPY --from=freeswitch-final /usr/local/freeswitch/ /usr/local/freeswitch/
+COPY --from=freeswitch-final /usr/local/bin/ /usr/local/bin/
+COPY --from=freeswitch-final /usr/local/lib/ /usr/local/lib/
+COPY --from=freeswitch-final /usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 \
