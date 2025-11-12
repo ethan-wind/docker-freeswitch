@@ -20,6 +20,7 @@ dockerImageRepo=$(grep dockerImageRepo .env | awk -F '=' '{print $2}')
 dockerImageVersion=$(grep dockerImageVersion .env | awk -F '=' '{print $2}')
 
 docker build \
+  --build-arg CACHEBUST=$(date +%s) \
   --build-arg CMAKE_VERSION="${cmakeVersion}" \
   --build-arg GRPC_VERSION="${grpcVersion}" \
   --build-arg LIBWEBSOCKETS_VERSION="${libwebsocketsVersion}" \

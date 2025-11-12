@@ -226,16 +226,20 @@ RUN cd /usr/local/src/freeswitch \
     && make install
 
 FROM base-cmake AS mod-audio-stream
+ARG CACHEBUST=1
 COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
 WORKDIR /usr/local/src
 ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
-RUN git clone --depth 1 -b v1.0.3 https://github.com/amigniter/mod_audio_stream.git \
+RUN echo "Cache bust: $CACHEBUST" \
+    && git clone https://github.com/ethan-wind/mod_audio_stream.git \
     && cd mod_audio_stream \
     && git submodule update --init --recursive \
     && mkdir -p build && cd build \
     && cmake -DCMAKE_BUILD_TYPE=Release .. \
     && make -j ${BUILD_CPUS} \
-    && make install
+    && make install \
+    && echo "Checking installed module:" \
+    && ls -la /usr/local/freeswitch/mod/ | grep audio || echo "Module not found in /usr/local/freeswitch/mod/"
 
 FROM freeswitch AS freeswitch-final
 COPY --from=mod-audio-stream /usr/local/freeswitch/mod/mod_audio_stream.so /usr/local/freeswitch/mod/
