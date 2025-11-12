@@ -238,7 +238,7 @@ RUN git clone --depth 1 -b v1.0.3 https://github.com/amigniter/mod_audio_stream.
     && make install
 
 FROM freeswitch AS freeswitch-final
-COPY --from=mod-audio-stream /usr/local/freeswitch/mod/ /usr/local/freeswitch/mod/
+COPY --from=mod-audio-stream /usr/local/freeswitch/mod/mod_audio_stream.so /usr/local/freeswitch/mod/
 RUN cd /usr/local/src/freeswitch \
     && cp /tmp/acl.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/event_socket.conf.xml /usr/local/freeswitch/conf/autoload_configs \
@@ -259,11 +259,11 @@ COPY --from=freeswitch-final /usr/local/bin/ /usr/local/bin/
 COPY --from=freeswitch-final /usr/local/lib/ /usr/local/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 \
+    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-2.1-7 \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/freeswitch/lib:/usr/local/lib:${LD_LIBRARY_PATH}"
 
 COPY ./entrypoint.sh /entrypoint.sh
 COPY ./vars_diff.xml  /usr/local/freeswitch/conf/vars_diff.xml
