@@ -257,13 +257,7 @@ ARG TARGETARCH
 COPY --from=freeswitch-final /usr/local/freeswitch/ /usr/local/freeswitch/
 COPY --from=freeswitch-final /usr/local/bin/ /usr/local/bin/
 COPY --from=freeswitch-final /usr/local/lib/ /usr/local/lib/
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      mkdir -p /usr/lib/aarch64-linux-gnu; \
-    else \
-      mkdir -p /usr/lib/x86_64-linux-gnu; \
-    fi
-COPY --from=freeswitch-final /usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/ 2>/dev/null || true
-COPY --from=freeswitch-final /usr/lib/x86_64-linux-gnu/ /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+COPY --from=freeswitch-final /usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 \
