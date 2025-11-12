@@ -263,7 +263,9 @@ COPY --from=freeswitch-final /usr/local/bin/ /usr/local/bin/
 COPY --from=freeswitch-final /usr/local/lib/ /usr/local/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev \
+    && apt update && apt install -y --quiet --no-install-recommends \
+    ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev \
+    ffmpeg libavcodec58 libavformat58 libavfilter7 libavutil56 libswresample3 libswscale5 \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
