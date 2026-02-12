@@ -6,19 +6,18 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-cmakeVersion=$(grep cmakeVersion .env | awk -F '=' '{print $2}')
-grpcVersion=$(grep grpcVersion .env | awk -F '=' '{print $2}')
-libwebsocketsVersion=$(grep libwebsocketsVersion .env | awk -F '=' '{print $2}')
-speechSdkVersion=$(grep speechSdkVersion .env | awk -F '=' '{print $2}')
-spandspVersion=$(grep spandspVersion .env | awk -F '=' '{print $2}')
-sofiaVersion=$(grep sofiaVersion .env | awk -F '=' '{print $2}')
-awsSdkCppVersion=$(grep awsSdkCppVersion .env | awk -F '=' '{print $2}')
-freeswitchModulesVersion=$(grep freeswitchModulesVersion .env | awk -F '=' '{print $2}')
-freeswitchVersion=$(grep freeswitchVersion .env | awk -F '=' '{print $2}')
+cmakeVersion=3.28.3
+grpcVersion=1.64.2
+libwebsocketsVersion=4.3.3
+speechSdkVersion=1.37.0
+spandspVersion=0d2e6ac # https://github.com/freeswitch/spandsp/commit/0d2e6ac65e0e8f53d652665a743015a88bf048d4
+sofiaVersion=1.13.17
+awsSdkCppVersion=1.11.345
+freeswitchModulesVersion=1.2.22
+freeswitchVersion=1.10.11
 
-dockerImageRepo=$(grep dockerImageRepo .env | awk -F '=' '{print $2}')
-dockerImageVersion=$(grep dockerImageVersion .env | awk -F '=' '{print $2}')
-
+dockerImageRepo=ue-test.harbor.useasy.net/ue/freeswitch
+dockerImageVersion=1.10.10-arm
 docker build \
   --platform linux/arm64 \
   --build-arg CMAKE_VERSION="${cmakeVersion}" \
@@ -30,4 +29,5 @@ docker build \
   --build-arg AWS_SDK_CPP_VERSION="${awsSdkCppVersion}" \
   --build-arg FREESWITCH_MODULES_VERSION="${freeswitchModulesVersion}" \
   --build-arg FREESWITCH_VERSION="${freeswitchVersion}" \
+  -f Dockerfile_arm64 \
   . --tag "${dockerImageRepo}:${dockerImageVersion}"
