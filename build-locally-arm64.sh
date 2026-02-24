@@ -10,7 +10,7 @@ cmakeVersion=3.28.3
 grpcVersion=1.64.2
 libwebsocketsVersion=4.3.3
 speechSdkVersion=1.37.0
-spandspVersion=0d2e6ac # https://github.com/freeswitch/spandsp/commit/0d2e6ac65e0e8f53d652665a743015a88bf048d4
+spandspVersion=0d2e6ac
 sofiaVersion=1.13.17
 awsSdkCppVersion=1.11.345
 freeswitchModulesVersion=1.2.22
@@ -18,7 +18,7 @@ freeswitchVersion=1.10.11
 
 dockerImageRepo=ue-test.harbor.useasy.net/ue/freeswitch
 dockerImageVersion=1.10.10-arm
-docker build \
+docker buildx build \
   --platform linux/arm64 \
   --build-arg CMAKE_VERSION="${cmakeVersion}" \
   --build-arg GRPC_VERSION="${grpcVersion}" \
