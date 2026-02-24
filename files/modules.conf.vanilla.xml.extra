@@ -132,6 +132,7 @@
       <!-- <load module="mod_cepstral"/> -->
       <!-- <load module="mod_tts_commandline"/> -->
       <!-- <load module="mod_rss"/> -->
+      <load module="mod_unimrcp"/>
 
       <!-- Say -->
       <load module="mod_say_en"/>
