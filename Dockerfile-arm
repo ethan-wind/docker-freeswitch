@@ -271,6 +271,12 @@ FROM base AS mod-unimrcp
 COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
 COPY --from=unimrcp /usr/local/unimrcp/ /usr/local/unimrcp/
 COPY --from=unimrcp-deps /usr/local/apr/ /usr/local/apr/
+COPY --from=libfvad /usr/local/lib/ /usr/local/lib/
+COPY --from=libfvad /usr/local/include/ /usr/local/include/
+COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
+COPY --from=spandsp /usr/local/include/ /usr/local/include/
+COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
+COPY --from=sofia-sip /usr/local/include/ /usr/local/include/
 WORKDIR /usr/local/src
 ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:/usr/local/unimrcp/lib/pkgconfig
 ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
