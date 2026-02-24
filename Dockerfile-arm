@@ -52,7 +52,7 @@ RUN export CMAKE_VERSION=$CMAKE_VERSION \
     && wget --no-check-certificate https://cmake.org/files/v${CMAKE_VERSION%.*}/cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && chmod +x cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && ./cmake-${CMAKE_VERSION}-linux-${ARCH}.sh --skip-license --prefix=/usr/local \
-    && rm -f cmake-${CMAKE_VERSION}-linux-x86_64.sh \
+    && rm -f cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && cmake --version
 
 # FROM base-cmake AS grpc
@@ -267,7 +267,7 @@ RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
-ENV LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/freeswitch/lib:/usr/local/lib:${LD_LIBRARY_PATH}"
 
 COPY ./entrypoint.sh /entrypoint.sh
 COPY ./vars_diff.xml  /usr/local/freeswitch/conf/vars_diff.xml
