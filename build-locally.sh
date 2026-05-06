@@ -6,18 +6,18 @@ if [ ! -f ".env" ]; then
   exit 1
 fi
 
-cmakeVersion=$(grep cmakeVersion .env | awk -F '=' '{print $2}')
-grpcVersion=$(grep grpcVersion .env | awk -F '=' '{print $2}')
-libwebsocketsVersion=$(grep libwebsocketsVersion .env | awk -F '=' '{print $2}')
-speechSdkVersion=$(grep speechSdkVersion .env | awk -F '=' '{print $2}')
-spandspVersion=$(grep spandspVersion .env | awk -F '=' '{print $2}')
-sofiaVersion=$(grep sofiaVersion .env | awk -F '=' '{print $2}')
-awsSdkCppVersion=$(grep awsSdkCppVersion .env | awk -F '=' '{print $2}')
-freeswitchModulesVersion=$(grep freeswitchModulesVersion .env | awk -F '=' '{print $2}')
-freeswitchVersion=$(grep freeswitchVersion .env | awk -F '=' '{print $2}')
+cmakeVersion=3.28.3
+grpcVersion=1.64.2
+libwebsocketsVersion=4.3.3
+speechSdkVersion=1.37.0
+spandspVersion=0d2e6ac
+sofiaVersion=1.13.17
+awsSdkCppVersion=1.11.345
+freeswitchModulesVersion=1.2.22
+freeswitchVersion=1.10.12
 
-dockerImageRepo=$(grep dockerImageRepo .env | awk -F '=' '{print $2}')
-dockerImageVersion=$(grep dockerImageVersion .env | awk -F '=' '{print $2}')
+dockerImageRepo=ue-test.harbor.useasy.net/ue/freeswitch
+dockerImageVersion=1.10.12
 
 docker build \
   --build-arg CACHEBUST=$(date +%s) \
