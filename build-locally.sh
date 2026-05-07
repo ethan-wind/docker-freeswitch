@@ -30,4 +30,4 @@ docker build \
   --build-arg AWS_SDK_CPP_VERSION="${awsSdkCppVersion}" \
   --build-arg FREESWITCH_MODULES_VERSION="${freeswitchModulesVersion}" \
   --build-arg FREESWITCH_VERSION="${freeswitchVersion}" \
-  . --tag "${dockerImageRepo}:${dockerImageVersion}"
+  -t "${dockerImageRepo}:${dockerImageVersion}" --push .
