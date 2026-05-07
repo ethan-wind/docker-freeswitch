@@ -52,7 +52,7 @@ RUN export CMAKE_VERSION=$CMAKE_VERSION \
     && wget --no-check-certificate https://cmake.org/files/v${CMAKE_VERSION%.*}/cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && chmod +x cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && ./cmake-${CMAKE_VERSION}-linux-${ARCH}.sh --skip-license --prefix=/usr/local \
-    && rm -f cmake-${CMAKE_VERSION}-linux-x86_64.sh \
+    && rm -f cmake-${CMAKE_VERSION}-linux-${ARCH}.sh \
     && cmake --version
 
 # FROM base-cmake AS grpc
@@ -231,7 +231,7 @@ COPY --from=freeswitch /usr/local/freeswitch/ /usr/local/freeswitch/
 WORKDIR /usr/local/src
 ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
 RUN echo "Cache bust: $CACHEBUST" \
-    && git clone https://github.com/ethan-wind/mod_audio_stream.git \
+    && git clone -b feature-stream-v2 https://github.com/ethan-wind/mod_audio_stream.git \
     && cd mod_audio_stream \
     && git submodule update --init --recursive \
     && mkdir -p build && cd build \
@@ -240,6 +240,7 @@ RUN echo "Cache bust: $CACHEBUST" \
     && make install \
     && echo "Checking installed module:" \
     && ls -la /usr/local/freeswitch/mod/ | grep audio || echo "Module not found in /usr/local/freeswitch/mod/"
+
 FROM base AS unimrcp-deps
 WORKDIR /usr/local/src
 ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
@@ -290,12 +291,6 @@ FROM freeswitch AS freeswitch-final
 COPY --from=mod-audio-stream /usr/local/freeswitch/mod/mod_audio_stream.so /usr/local/freeswitch/mod/
 COPY --from=mod-unimrcp /usr/local/freeswitch/mod/mod_unimrcp.so /usr/local/freeswitch/mod/
 COPY --from=unimrcp /usr/local/unimrcp/ /usr/local/unimrcp/
-COPY --from=libfvad /usr/local/lib/ /usr/local/lib/
-COPY --from=libfvad /usr/local/include/ /usr/local/include/
-COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
-COPY --from=spandsp /usr/local/include/ /usr/local/include/
-COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
-COPY --from=sofia-sip /usr/local/include/ /usr/local/include/
 RUN cd /usr/local/src/freeswitch \
     && cp /tmp/acl.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/event_socket.conf.xml /usr/local/freeswitch/conf/autoload_configs \
@@ -318,8 +313,7 @@ COPY --from=freeswitch-final /usr/local/unimrcp/ /usr/local/unimrcp/
 COPY --from=unimrcp-deps /usr/local/apr/lib/ /usr/local/apr/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt update && apt install -y --quiet --no-install-recommends \
-    ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev \
+    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3  libevent-dev \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
