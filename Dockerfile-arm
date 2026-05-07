@@ -291,12 +291,6 @@ FROM freeswitch AS freeswitch-final
 COPY --from=mod-audio-stream /usr/local/freeswitch/mod/mod_audio_stream.so /usr/local/freeswitch/mod/
 COPY --from=mod-unimrcp /usr/local/freeswitch/mod/mod_unimrcp.so /usr/local/freeswitch/mod/
 COPY --from=unimrcp /usr/local/unimrcp/ /usr/local/unimrcp/
-COPY --from=libfvad /usr/local/lib/ /usr/local/lib/
-COPY --from=libfvad /usr/local/include/ /usr/local/include/
-COPY --from=spandsp /usr/local/lib/ /usr/local/lib/
-COPY --from=spandsp /usr/local/include/ /usr/local/include/
-COPY --from=sofia-sip /usr/local/lib/ /usr/local/lib/
-COPY --from=sofia-sip /usr/local/include/ /usr/local/include/
 RUN cd /usr/local/src/freeswitch \
     && cp /tmp/acl.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/event_socket.conf.xml /usr/local/freeswitch/conf/autoload_configs \
