@@ -1,6 +1,24 @@
 #ifndef __WSTTS_EXAMPLE_H__
 #define __WSTTS_EXAMPLE_H__
 
+// Keep WebSocket++ on Boost types to match the Boost.Asio transport.
+#ifndef _WEBSOCKETPP_NO_CPP11_MEMORY_
+#define _WEBSOCKETPP_NO_CPP11_MEMORY_
+#endif
+
+#ifndef _WEBSOCKETPP_NO_CPP11_FUNCTIONAL_
+#define _WEBSOCKETPP_NO_CPP11_FUNCTIONAL_
+#endif
+
+#ifndef _WEBSOCKETPP_NO_CPP11_SYSTEM_ERROR_
+#define _WEBSOCKETPP_NO_CPP11_SYSTEM_ERROR_
+#endif
+
+#include <openssl/ssl.h>
+#ifndef SSL_R_SHORT_READ
+#define SSL_R_SHORT_READ 0
+#endif
+
 #include <websocketpp/config/asio_client.hpp>
 #include <websocketpp/client.hpp>
 #include <string>

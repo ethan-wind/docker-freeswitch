@@ -39,7 +39,7 @@ RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
     && sed -i 's/mirrors.aliyun.com/deb.debian.org/g' /etc/apt/sources.list \
     && sed -i 's/mirrors.aliyun.com/security.debian.org/g' /etc/apt/sources.list \
     && apt-get update \
-    && apt-get install -y --quiet --no-install-recommends libboost-all-dev \
+    && apt-get install -y --quiet --no-install-recommends libboost-all-dev libwebsocketpp-dev \
     && git config --global http.postBuffer 524288000  \
   	&& git config --global https.postBuffer 524288000 \
 	  && git config --global pull.rebase true
@@ -242,12 +242,10 @@ RUN echo "Cache bust: $CACHEBUST" \
     && ls -la /usr/local/freeswitch/mod/ | grep audio || echo "Module not found in /usr/local/freeswitch/mod/"
 
 FROM freeswitch AS mod-myasr
-COPY ./deploy/websocketpp.tar.gz /tmp/websocketpp.tar.gz
 COPY ./mod_myasr/ /usr/local/src/mod_myasr/
 WORKDIR /usr/local/src/mod_myasr
 ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
-RUN tar -xzf /tmp/websocketpp.tar.gz -C /usr/local/include --strip-components=1 \
-    && chmod +x ./build.sh \
+RUN chmod +x ./build.sh \
     && rm -f mod_myasr.so \
     && ./build.sh \
     && test -s mod_myasr.so
