@@ -133,6 +133,7 @@
       <!-- <load module="mod_tts_commandline"/> -->
       <!-- <load module="mod_rss"/> -->
       <load module="mod_unimrcp"/>
+      <load module="mod_myasr"/>
 
       <!-- Say -->
       <load module="mod_say_en"/>

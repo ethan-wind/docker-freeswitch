@@ -1,5 +1,21 @@
-#/bin/sh
-freeswitch_include_path="/opt/freeswitch/include/"
-freeswitch_libs_path="/opt/freeswitch/lib"
+#!/bin/sh
+set -eu
 
-g++ -std=c++11 -shared -fPIC -o mod_myasr.so httpclient.cpp mod_myasr.cpp  -pthread -I ${freeswitch_include_path} -I/usr/local/include -I/opt/websocketpp-master -I/usr/local/curl/include -I/usr/local/openssl/include/openssl -L/usr/local/lib -L/usr/local/curl/lib  -L/usr/local/openssl/lib -L ${freeswitch_libs_path} -ldl -lm -lssl -lcurl -lpthread -lboost_thread -lboost_system -lfreeswitch -Wl,-rpath-link=${freeswitch_libs_path},-rpath=${freeswitch_libs_path}
+FREESWITCH_PREFIX="${FREESWITCH_PREFIX:-/usr/local/freeswitch}"
+WEBSOCKETPP_INCLUDE_PATH="${WEBSOCKETPP_INCLUDE_PATH:-/usr/local/include}"
+
+export PKG_CONFIG_PATH="${FREESWITCH_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+FS_CFLAGS="$(pkg-config --cflags freeswitch 2>/dev/null || echo "-I${FREESWITCH_PREFIX}/include/freeswitch")"
+FS_LIBS="$(pkg-config --libs freeswitch 2>/dev/null || echo "-L${FREESWITCH_PREFIX}/lib -lfreeswitch")"
+
+g++ -std=c++11 -shared -fPIC -o mod_myasr.so \
+    httpclient.cpp mod_myasr.cpp \
+    -pthread \
+    ${FS_CFLAGS} \
+    -I"${WEBSOCKETPP_INCLUDE_PATH}" \
+    -I/usr/local/include \
+    -L/usr/local/lib \
+    ${FS_LIBS} \
+    -ldl -lm -lssl -lcrypto -lcurl -lpthread -lboost_thread -lboost_system \
+    -Wl,-rpath-link="${FREESWITCH_PREFIX}/lib",-rpath="${FREESWITCH_PREFIX}/lib"

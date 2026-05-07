@@ -2,3 +2,4 @@ conf/
 .dockerignore
 Dockerfile
 ._DS_Store
+mod_myasr/mod_myasr.so

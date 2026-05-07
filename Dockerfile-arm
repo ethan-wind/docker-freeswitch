@@ -241,6 +241,17 @@ RUN echo "Cache bust: $CACHEBUST" \
     && echo "Checking installed module:" \
     && ls -la /usr/local/freeswitch/mod/ | grep audio || echo "Module not found in /usr/local/freeswitch/mod/"
 
+FROM freeswitch AS mod-myasr
+COPY ./deploy/websocketpp.tar.gz /tmp/websocketpp.tar.gz
+COPY ./mod_myasr/ /usr/local/src/mod_myasr/
+WORKDIR /usr/local/src/mod_myasr
+ENV PKG_CONFIG_PATH=/usr/local/freeswitch/lib/pkgconfig:$PKG_CONFIG_PATH
+RUN tar -xzf /tmp/websocketpp.tar.gz -C /usr/local/include --strip-components=1 \
+    && chmod +x ./build.sh \
+    && rm -f mod_myasr.so \
+    && ./build.sh \
+    && test -s mod_myasr.so
+
 FROM base AS unimrcp-deps
 WORKDIR /usr/local/src
 ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
@@ -289,6 +300,8 @@ RUN git clone https://github.com/freeswitch/mod_unimrcp.git \
 
 FROM freeswitch AS freeswitch-final
 COPY --from=mod-audio-stream /usr/local/freeswitch/mod/mod_audio_stream.so /usr/local/freeswitch/mod/
+COPY --from=mod-myasr /usr/local/src/mod_myasr/mod_myasr.so /usr/local/freeswitch/mod/
+COPY --from=mod-myasr /usr/local/src/mod_myasr/myasr.conf.xml /usr/local/freeswitch/conf/autoload_configs/
 COPY --from=mod-unimrcp /usr/local/freeswitch/mod/mod_unimrcp.so /usr/local/freeswitch/mod/
 COPY --from=unimrcp /usr/local/unimrcp/ /usr/local/unimrcp/
 RUN cd /usr/local/src/freeswitch \
@@ -313,7 +326,7 @@ COPY --from=freeswitch-final /usr/local/unimrcp/ /usr/local/unimrcp/
 COPY --from=unimrcp-deps /usr/local/apr/lib/ /usr/local/apr/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3  libevent-dev \
+    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev libboost-thread1.74.0 libboost-system1.74.0 \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"

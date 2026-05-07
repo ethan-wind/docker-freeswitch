@@ -26,4 +26,4 @@ sudo make install
 cmake --version
 
 4.配置websocketpp
-build.sh里面需要配置websocketpp的存放目录。
+build.sh文件里需要改为websocketpp的存放目录。
