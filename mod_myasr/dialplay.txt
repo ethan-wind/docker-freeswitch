@@ -1,0 +1,43 @@
+public.xml拨号计划中测试脚本
+
+
+主叫1个通道
+        <action application="answer"></action>  
+        <action application="set" data="call_uuid=${uuid}"/>
+        <action application="start_myasr" data="1"/>
+        <action application="playback" data="/app/test.wav"></action>
+        <action application="hangup"/>
+
+
+主被叫2个通道
+        <action application="set" data="call_uuid=${uuid}"/>
+        <action application="set" data="bleg_uuid=${create_uuid()}"/>
+        <action application="start_myasr" data="2"/>
+        <action application="bridge" data="{origination_uuid=${bleg_uuid}}user/1001"/>
+	<action application="hangup"/>
+
+
+推送给esl的消息定义:
+
+1. 开始:
+"Event-Subclass", "myasr"
+"ASR-Response", msg
+"Channel-Call-UUID", uuid
+"ASR-Event", "BeginAsr"
+
+2. 结束:
+"Event-Subclass", "myasr"
+"ASR-Response", msg
+"Channel-Call-UUID", uuid
+"ASR-Event", "EndAsr"
+
+3. 文字:
+"Event-Subclass", "myasr"
+"ASR-Response", msg
+"Channel-Call-UUID", uuid
+"ASR-Event", "SentenceChanged"
+
+
+
+
+

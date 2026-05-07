@@ -1,0 +1,13 @@
+<configuration name="myasr.conf" description="asr">
+    <settings>
+         <param name="client_id" value="3dff4f7e7e98420cb0a3e8e9dbfdb86f"/>
+         <param name="client_secret" value="ba9b3427cf8048d2afa2eab00bac3bb7"/>
+         <param name="server_ip" value="openapi.data-baker.com"/>
+         <param name="server_port" value="443"/>
+         <param name="url_param" value="/oauth/2.0/token?grant_type=client_credentials"/>
+
+		 <param name="wss_server_ip" value="asr.data-baker.com"/>
+   </settings>
+</configuration>
+
+
