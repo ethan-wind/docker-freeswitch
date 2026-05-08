@@ -97,6 +97,7 @@ static struct
 	int http_recv_buffer_len;
 	char *app_id;
 	char *app_key;
+	char *wss_url;
 } globals;
 
 int GetKeyValue(const char *str, int addlen, const char *key, int maxlen, char *values)
@@ -137,10 +138,31 @@ int GetKeyValue(const char *str, int addlen, const char *key, int maxlen, char *
 
 static switch_status_t load_mymedia_config(switch_memory_pool_t *pool)
 {
-	switch_status_t status = SWITCH_STATUS_SUCCESS;
-	globals.app_id = const_cast<char*>("123");
-	globals.app_key = const_cast<char*>("123");
-	return status;
+	switch_xml_t cfg, xml, settings, param;
+	if (!(xml = switch_xml_open_cfg("myasr.conf", &cfg, NULL))) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to open myasr.conf\n");
+		return SWITCH_STATUS_FALSE;
+	}
+	if ((settings = switch_xml_child(cfg, "settings"))) {
+		for (param = switch_xml_child(settings, "param"); param; param = param->next) {
+			const char *name = switch_xml_attr_soft(param, "name");
+			const char *value = switch_xml_attr_soft(param, "value");
+			if (!strcmp(name, "app_id"))
+				globals.app_id = switch_core_strdup(pool, value);
+			else if (!strcmp(name, "app_key"))
+				globals.app_key = switch_core_strdup(pool, value);
+			else if (!strcmp(name, "wss_url"))
+				globals.wss_url = switch_core_strdup(pool, value);
+		}
+	}
+	switch_xml_free(xml);
+	return SWITCH_STATUS_SUCCESS;
+}
+
+static void event_handler(switch_event_t *event)
+{
+	load_mymedia_config(globals.pool);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr config reloaded\n");
 }
 void asrTextEvent(const char *uuid, char *msg, const char *asrType)
 {
@@ -1293,7 +1315,7 @@ static void *wss_client_run(void *arg)
 	// 决定使用哪个appid：如果有自定义appid则使用，否则使用默认的
 	char *url_appid = (strlen(wud->custom_appid) > 0) ? wud->custom_appid : appid;
 	// snprintf(url, sizeof(url), "wss://dev1-asr.useasy.cn/v1/ws?appid=%s&ts=%ld&signa=%s", url_appid, (long)timeStamp, signaEncode.c_str());
-	snprintf(url, sizeof(url), "wss://rtasr.xfyun.cn/v1/ws?appid=%s&ts=%ld&signa=%s", url_appid, (long)timeStamp, signaEncode.c_str());
+	snprintf(url, sizeof(url), "%s?appid=%s&ts=%ld&signa=%s", globals.wss_url, url_appid, (long)timeStamp, signaEncode.c_str());
 	std::string ws_url = url;
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client begin connect url=%s bufidx=%d using appid=%s\n", ws_url.c_str(), wud->bufidx, url_appid);
 
@@ -1697,7 +1719,10 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_myasr_load)
 {
 	switch_application_interface_t *app_interface;
 
+	globals.pool = pool;
 	load_mymedia_config(pool);
+
+	switch_event_bind(modname, SWITCH_EVENT_RELOADXML, NULL, event_handler, NULL);
 
 	*module_interface = switch_loadable_module_create_module_interface(pool, modname);
 
@@ -1720,7 +1745,9 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_myasr_load)
 SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_myasr_shutdown)
 {
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "myasr_shutdown\n");
-	
+
+	switch_event_unbind_callback(event_handler);
+
 	g_app_shutdown = 0;
 	
 	// 清理所有通道状态，确保工作线程正确退出
