@@ -17,7 +17,10 @@ freeswitchModulesVersion=1.2.22
 freeswitchVersion=1.10.12
 
 dockerImageRepo=ue-test.harbor.useasy.net/ue/freeswitch
-dockerImageVersion=1.10.12
+randomCode=$(printf "%04x%04x" "$RANDOM" "$RANDOM")
+dockerImageVersion="1.10.12-${randomCode}"
+
+echo "Building image ${dockerImageRepo}:${dockerImageVersion}"
 
 docker build \
   --build-arg CACHEBUST=$(date +%s) \

@@ -17,7 +17,11 @@ freeswitchModulesVersion=1.2.22
 freeswitchVersion=1.10.12
 
 dockerImageRepo=ue-test.harbor.useasy.net/ue/freeswitch
-dockerImageVersion=1.10.12-arm
+randomCode=$(printf "%04x%04x" "$RANDOM" "$RANDOM")
+dockerImageVersion="1.10.12-arm-${randomCode}"
+
+echo "Building image ${dockerImageRepo}:${dockerImageVersion}"
+
 docker buildx build \
   --platform linux/arm64 \
   --build-arg CMAKE_VERSION="${cmakeVersion}" \
