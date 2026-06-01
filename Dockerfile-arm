@@ -305,6 +305,7 @@ COPY --from=unimrcp /usr/local/unimrcp/ /usr/local/unimrcp/
 RUN cd /usr/local/src/freeswitch \
     && cp /tmp/acl.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/event_socket.conf.xml /usr/local/freeswitch/conf/autoload_configs \
+    && cp /tmp/json_cdr.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/switch.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && cp /tmp/conference.conf.xml /usr/local/freeswitch/conf/autoload_configs \
     && rm -Rf /usr/local/freeswitch/conf/dialplan/* \

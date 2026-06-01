@@ -64,6 +64,7 @@ This is the modules.conf.xml file in the image which dictates which modules get 
     <!-- Event Handlers -->
     <!-- <load module="mod_amqp"/> -->
     <load module="mod_cdr_csv"/>
+    <load module="mod_json_cdr"/>
     <!-- <load module="mod_cdr_sqlite"/> -->
     <!-- <load module="mod_event_multicast"/> -->
     <load module="mod_event_socket"/>
