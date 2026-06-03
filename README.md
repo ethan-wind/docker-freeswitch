@@ -95,7 +95,7 @@ This is the modules.conf.xml file in the image which dictates which modules get 
     <!-- Applications -->
     <load module="mod_commands"/>
     <load module="mod_conference"/>
-    <!-- <load module="mod_curl"/> -->
+    <load module="mod_curl"/>
     <!-- <load module="mod_db"/> -->
     <load module="mod_dptools"/>
     <!-- <load module="mod_expr"/> -->
