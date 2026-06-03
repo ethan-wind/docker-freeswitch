@@ -1,6 +1,7 @@
 FROM debian:bullseye-slim AS base
 
 ARG BUILD_CPUS=1
+ENV TZ=Asia/Shanghai
 
 ## # this will be populated from the vaule in .env file
 ARG CMAKE_VERSION 
@@ -26,9 +27,9 @@ RUN echo "FREESWITCH_VERSION=$FREESWITCH_VERSION"
 RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
     && sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt-get update && apt-get -y --quiet --allow-remove-essential upgrade \
-    && apt-get install -y --quiet --no-install-recommends \
-    python-is-python3 lsof gcc g++ make build-essential git autoconf automake default-mysql-client redis-tools \
+    && DEBIAN_FRONTEND=noninteractive apt-get update && DEBIAN_FRONTEND=noninteractive apt-get -y --quiet --allow-remove-essential upgrade \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --quiet --no-install-recommends \
+    tzdata python-is-python3 lsof gcc g++ make build-essential git autoconf automake default-mysql-client redis-tools \
     curl telnet libtool libtool-bin libssl-dev libcurl4-openssl-dev libz-dev liblz4-tool \
     libxtables-dev libip6tc-dev libip4tc-dev  libiptc-dev libavformat-dev liblua5.1-0-dev libavfilter-dev libavcodec-dev libswresample-dev \
     libevent-dev libpcap-dev libxmlrpc-core-c3-dev markdown libjson-glib-dev lsb-release libpq-dev php-dev \
@@ -38,8 +39,10 @@ RUN for i in $(seq 1 8); do mkdir -p "/usr/share/man/man${i}"; done \
     libopus-dev libsndfile-dev libshout3-dev libmpg123-dev libmp3lame-dev libopusfile-dev libgoogle-perftools-dev \
     && sed -i 's/mirrors.aliyun.com/deb.debian.org/g' /etc/apt/sources.list \
     && sed -i 's/mirrors.aliyun.com/security.debian.org/g' /etc/apt/sources.list \
-    && apt-get update \
-    && apt-get install -y --quiet --no-install-recommends libboost-all-dev libwebsocketpp-dev \
+    && DEBIAN_FRONTEND=noninteractive apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --quiet --no-install-recommends libboost-all-dev libwebsocketpp-dev \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && git config --global http.postBuffer 524288000  \
   	&& git config --global https.postBuffer 524288000 \
 	  && git config --global pull.rebase true
@@ -318,6 +321,7 @@ RUN cd /usr/local/src/freeswitch \
 
 FROM debian:bullseye-slim AS final
 ARG TARGETARCH
+ENV TZ=Asia/Shanghai
 COPY --from=freeswitch-final /usr/local/freeswitch/ /usr/local/freeswitch/
 COPY --from=freeswitch-final /usr/local/bin/ /usr/local/bin/
 COPY --from=freeswitch-final /usr/local/lib/ /usr/local/lib/
@@ -325,7 +329,10 @@ COPY --from=freeswitch-final /usr/local/unimrcp/ /usr/local/unimrcp/
 COPY --from=unimrcp-deps /usr/local/apr/lib/ /usr/local/apr/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
-    && apt update && apt install -y --quiet --no-install-recommends ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev libboost-thread1.74.0 libboost-system1.74.0 \
+    && DEBIAN_FRONTEND=noninteractive apt update \
+    && DEBIAN_FRONTEND=noninteractive apt install -y --quiet --no-install-recommends tzdata ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev libboost-thread1.74.0 libboost-system1.74.0 \
+    && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
+    && echo $TZ > /etc/timezone \
     && ldconfig && rm -rf /var/lib/apt/lists/*
 
 ENV PATH="/usr/local/freeswitch/bin:${PATH}"
