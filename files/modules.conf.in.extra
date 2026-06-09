@@ -130,7 +130,7 @@ formats/mod_tone_stream
 formats/mod_opusfile
 #languages/mod_basic
 #languages/mod_java
-#languages/mod_lua
+languages/mod_lua
 #languages/mod_managed
 #languages/mod_perl
 #languages/mod_python
