@@ -330,7 +330,7 @@ COPY --from=unimrcp-deps /usr/local/apr/lib/ /usr/local/apr/lib/
 RUN sed -i 's/deb.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && sed -i 's/security.debian.org/mirrors.aliyun.com/g' /etc/apt/sources.list \
     && DEBIAN_FRONTEND=noninteractive apt update \
-    && DEBIAN_FRONTEND=noninteractive apt install -y --quiet --no-install-recommends tzdata ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 libevent-dev libboost-thread1.74.0 libboost-system1.74.0 \
+    && DEBIAN_FRONTEND=noninteractive apt install -y --quiet --no-install-recommends tzdata ca-certificates libsqlite3-0 libcurl4 libpcre3 libspeex1 libspeexdsp1 libedit2 libtiff5 libopus0 libsndfile1 libshout3 liblua5.1-0 libevent-dev libboost-thread1.74.0 libboost-system1.74.0 \
     && ln -snf /usr/share/zoneinfo/$TZ /etc/localtime \
     && echo $TZ > /etc/timezone \
     && ldconfig && rm -rf /var/lib/apt/lists/*
