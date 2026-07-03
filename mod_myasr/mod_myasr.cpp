@@ -35,6 +35,7 @@ extern "C"
 
 #define MAX_PAYLOAD_SIZE 1280 // 1280
 #define MAX_USER_CHANNEL 10000
+#define MYASR_AUDIO_QUEUE_SIZE 8
 #define MYASR_TARGET_SAMPLE_RATE 16000
 
 int g_app_shutdown = 0; // 1 mod_myasr_load, 0 mod_myasr_shutdown
@@ -43,9 +44,18 @@ int g_user_channel_state[MAX_USER_CHANNEL] = {0}; // 0 stop, 1 run
 time_t g_timeout[MAX_USER_CHANNEL] = {0};
 int g_nCurr_channel_index = 0;
 
-// fs audio buffer for send
-unsigned char g_audiobuf[MAX_USER_CHANNEL][MAX_PAYLOAD_SIZE + 1];
-size_t g_audiobuf_len[MAX_USER_CHANNEL] = {0};
+struct myasr_audio_queue
+{
+	unsigned char data[MYASR_AUDIO_QUEUE_SIZE][MAX_PAYLOAD_SIZE + 1];
+	size_t len[MYASR_AUDIO_QUEUE_SIZE];
+	uint32_t head;
+	uint32_t tail;
+	uint32_t count;
+	uint32_t dropped;
+};
+
+// fs audio buffers for send
+myasr_audio_queue *g_audio_queues[MAX_USER_CHANNEL] = {0};
 
 pthread_mutex_t idx_mutex;
 int idx_Lock() { return pthread_mutex_lock(&idx_mutex); }
@@ -103,6 +113,99 @@ static struct
 	char *wss_url;
 } globals;
 
+static void myasr_audio_queue_reset_locked(myasr_audio_queue *queue)
+{
+	if (!queue)
+	{
+		return;
+	}
+
+	memset(queue->data, 0, sizeof(queue->data));
+	memset(queue->len, 0, sizeof(queue->len));
+	queue->head = 0;
+	queue->tail = 0;
+	queue->count = 0;
+	queue->dropped = 0;
+}
+
+static switch_bool_t myasr_audio_queue_prepare(int aleg_idx)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL)
+	{
+		return SWITCH_FALSE;
+	}
+
+	idx_Lock();
+	if (!g_audio_queues[aleg_idx])
+	{
+		g_audio_queues[aleg_idx] = (myasr_audio_queue *)calloc(1, sizeof(myasr_audio_queue));
+	}
+	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
+	myasr_audio_queue_reset_locked(queue);
+	idx_Unlock();
+
+	return queue ? SWITCH_TRUE : SWITCH_FALSE;
+}
+
+static void myasr_audio_queue_release_locked(int aleg_idx)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL)
+	{
+		return;
+	}
+
+	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
+	g_audio_queues[aleg_idx] = NULL;
+	if (queue)
+	{
+		free(queue);
+	}
+}
+
+static size_t myasr_audio_queue_peek_len_locked(int aleg_idx)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL)
+	{
+		return 0;
+	}
+
+	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
+	if (!queue || queue->count == 0)
+	{
+		return 0;
+	}
+
+	return queue->len[queue->head];
+}
+
+static size_t myasr_audio_queue_pop_locked(int aleg_idx, unsigned char *out, size_t out_size)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || !out || out_size == 0)
+	{
+		return 0;
+	}
+
+	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
+	if (!queue || queue->count == 0)
+	{
+		return 0;
+	}
+
+	uint32_t slot = queue->head;
+	size_t len = queue->len[slot];
+	if (len > out_size)
+	{
+		len = out_size;
+	}
+
+	memcpy(out, queue->data[slot], len);
+	memset(queue->data[slot], 0, sizeof(queue->data[slot]));
+	queue->len[slot] = 0;
+	queue->head = (queue->head + 1) % MYASR_AUDIO_QUEUE_SIZE;
+	queue->count--;
+	return len;
+}
+
 static void myasr_publish_audio_buffer(int aleg_idx, const char *data, size_t len)
 {
 	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || !data || len == 0)
@@ -112,9 +215,31 @@ static void myasr_publish_audio_buffer(int aleg_idx, const char *data, size_t le
 
 	size_t publish_len = len > MAX_PAYLOAD_SIZE ? MAX_PAYLOAD_SIZE : len;
 	idx_Lock();
-	memset(g_audiobuf[aleg_idx], 0, sizeof(g_audiobuf[aleg_idx]));
-	memcpy(g_audiobuf[aleg_idx], data, publish_len);
-	g_audiobuf_len[aleg_idx] = publish_len;
+	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
+	if (!queue)
+	{
+		idx_Unlock();
+		return;
+	}
+
+	if (queue->count == MYASR_AUDIO_QUEUE_SIZE)
+	{
+		queue->head = (queue->head + 1) % MYASR_AUDIO_QUEUE_SIZE;
+		queue->count--;
+		queue->dropped++;
+		if (queue->dropped == 1 || queue->dropped % 100 == 0)
+		{
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio queue full, drop oldest packet aleg_idx=%d dropped=%u\n",
+							  aleg_idx, queue->dropped);
+		}
+	}
+
+	uint32_t slot = queue->tail;
+	memset(queue->data[slot], 0, sizeof(queue->data[slot]));
+	memcpy(queue->data[slot], data, publish_len);
+	queue->len[slot] = publish_len;
+	queue->tail = (queue->tail + 1) % MYASR_AUDIO_QUEUE_SIZE;
+	queue->count++;
 	idx_Unlock();
 }
 
@@ -924,8 +1049,7 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 			try {
 				idx_Lock();
 				g_user_channel_state[bufidx_] = 0;
-				g_audiobuf_len[bufidx_] = 0;
-				memset(g_audiobuf[bufidx_], 0, MAX_PAYLOAD_SIZE + 1);
+				myasr_audio_queue_release_locked(bufidx_);
 				idx_Unlock();
 			} catch (...) {
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "on_fail : exception during channel cleanup uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
@@ -1051,216 +1175,187 @@ void wssclient::work_thread()
 			break;
 		}
 
-		// 安全的互斥锁访问和数组边界检查
-		int channel_state = 0;
-		size_t audio_len = 0;
-		bool lock_acquired = false;
-		
-		// 尝试获取锁，带超时保护
-		for (int retry = 0; retry < 3; retry++) {
-			if (idx_TryLock() == 0) {
-				lock_acquired = true;
-				// 双重检查数组边界
-				if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-					channel_state = g_user_channel_state[bufidx_];
-					audio_len = g_audiobuf_len[bufidx_];
-				} else {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "work_thread : bufidx out of bounds %d\n", bufidx_);
-					idx_Unlock();
-					m_exit_ = 2;
+			// 安全的互斥锁访问和数组边界检查
+			int channel_state = 0;
+			size_t audio_len = 0;
+			bool lock_acquired = false;
+
+			// 尝试获取锁，带超时保护
+			for (int retry = 0; retry < 3; retry++) {
+				if (idx_TryLock() == 0) {
+					lock_acquired = true;
+					// 双重检查数组边界
+					if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
+						channel_state = g_user_channel_state[bufidx_];
+						audio_len = myasr_audio_queue_peek_len_locked(bufidx_);
+					} else {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "work_thread : bufidx out of bounds %d\n", bufidx_);
+						m_exit_ = 2;
+					}
 					break;
-				}
-				break;
-			} else {
-				usleep(5000); // 等待5ms
-			}
-		}
-		
-		if (!lock_acquired) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : failed to acquire lock after retries uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			usleep(10000);
-			continue;
-		}
-		
-		if (channel_state == 0)
-		{
-			// 通道已停止，检查是否是连接失败导致的
-			if (m_exit_ == 2) {
-				// WebSocket连接失败，直接退出，不尝试发送数据
-				idx_Unlock();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : WebSocket connection failed, exiting thread immediately uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-				break;
-			}
-			
-			// 正常结束，发送结束信号 - 但需要再次检查连接状态
-			if (audio_len > 0 && m_exit_ != 2)
-			{
-				// 安全发送剩余音频数据
-				unsigned char temp_buf[MAX_PAYLOAD_SIZE + 1];
-				size_t temp_len = (audio_len > MAX_PAYLOAD_SIZE) ? MAX_PAYLOAD_SIZE : audio_len;
-				// 安全的内存拷贝，添加边界检查
-				if (temp_len > 0 && bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-					memset(temp_buf, 0, sizeof(temp_buf));
-					memcpy(temp_buf, g_audiobuf[bufidx_], temp_len);
-					g_audiobuf_len[bufidx_] = 0;
 				} else {
-					temp_len = 0;
+					usleep(5000); // 等待5ms
 				}
-				
+			}
+
+			if (!lock_acquired) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : failed to acquire lock after retries uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+				usleep(10000);
+				continue;
+			}
+
+			if (m_exit_ == 2) {
 				idx_Unlock();
-				
-				// 安全检查连接并发送数据
-				if (temp_len > 0 && !hdl_.expired()) {
-					try {
-						client::connection_ptr con;
-						{
-							// 使用局部作用域保护连接获取
-							con = ws_client_.get_con_from_hdl(hdl_);
-						}
-						if (con && con->get_state() == websocketpp::session::state::open) {
-							asr_params_.req_idx = req_idx++;
-							asr_params_.req_idx = 0 - asr_params_.req_idx;
-							if (!send_request_frame(hdl_, (char *)temp_buf, temp_len)) {
-								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send failed, exiting uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-								break;
+				break;
+			}
+
+			if (channel_state == 0)
+			{
+				// 通道已停止，先把队列里的剩余音频按顺序发完，再发送结束信号。
+				if (audio_len > 0)
+				{
+					unsigned char temp_buf[MAX_PAYLOAD_SIZE + 1];
+					size_t temp_len = (audio_len > MAX_PAYLOAD_SIZE) ? MAX_PAYLOAD_SIZE : audio_len;
+					bool is_last_audio_packet = true;
+
+					memset(temp_buf, 0, sizeof(temp_buf));
+					temp_len = myasr_audio_queue_pop_locked(bufidx_, temp_buf, sizeof(temp_buf));
+					is_last_audio_packet = myasr_audio_queue_peek_len_locked(bufidx_) == 0;
+					idx_Unlock();
+
+					if (temp_len > 0 && !hdl_.expired()) {
+						try {
+							client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
+							if (con && con->get_state() == websocketpp::session::state::open) {
+								asr_params_.req_idx = req_idx++;
+								if (is_last_audio_packet)
+								{
+									asr_params_.req_idx = 0 - asr_params_.req_idx;
+								}
+								if (!send_request_frame(hdl_, (char *)temp_buf, temp_len)) {
+									switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send failed, exiting uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+									break;
+								}
+								last_activity = time(NULL);
+								if (!is_last_audio_packet)
+								{
+									continue;
+								}
+								usleep(400000);
+							} else {
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not open, skipping send uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 							}
-							// 更新活动时间
-							last_activity = time(NULL);
-							usleep(400000);
-						} else {
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not open, skipping send uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						} catch (const std::exception& e) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during send: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
+							break;
+						} catch (...) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during send uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+							break;
+						}
+					}
+				}
+				else
+				{
+					idx_Unlock();
+				}
+
+				// 安全发送结束信号
+				if (m_exit_ != 2 && !hdl_.expired()) {
+					try {
+						client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
+						if (con && con->get_state() == websocketpp::session::state::open) {
+							const char *end_signal = "{\"end\": true}";
+							char *end_data = const_cast<char *>(end_signal);
+							size_t end_len = std::strlen(end_signal);
+							if (!send_request_frame(hdl_, end_data, end_len)) {
+								switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send end signal failed uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+							}
 						}
 					} catch (const std::exception& e) {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during send: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
-						break;
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during end signal: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
 					} catch (...) {
-						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during send uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during end signal uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					}
+				}
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : normal end exit uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+				break;
+			}
+			else if (audio_len > 0)
+			{
+				unsigned char temp_buf[MAX_PAYLOAD_SIZE + 1];
+				size_t temp_len = (audio_len > MAX_PAYLOAD_SIZE) ? MAX_PAYLOAD_SIZE : audio_len;
+
+				memset(temp_buf, 0, sizeof(temp_buf));
+				temp_len = myasr_audio_queue_pop_locked(bufidx_, temp_buf, sizeof(temp_buf));
+				idx_Unlock();
+
+				if (m_exit_ == 1 || m_exit_ == 2 || temp_len == 0) {
+					if (m_exit_ != 0) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : exit signal during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					}
+					break;
+				}
+
+				if (hdl_.expired()) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection expired during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					m_exit_ = 2;
+					break;
+				}
+
+				try {
+					client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
+					if (!con || con->get_state() != websocketpp::session::state::open) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not open during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						m_exit_ = 2;
 						break;
 					}
-				}
-			}
-			else
-			{
-				idx_Unlock();
-			}
-			
-			// 安全发送结束信号
-			if (m_exit_ != 2 && !hdl_.expired()) {
-				try {
-					client::connection_ptr con;
-					{
-						con = ws_client_.get_con_from_hdl(hdl_);
+
+					asr_params_.req_idx = req_idx++;
+					if (!send_request_frame(hdl_, (char *)temp_buf, temp_len)) {
+						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send audio failed, exiting uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						m_exit_ = 2;
+						break;
 					}
-					if (con && con->get_state() == websocketpp::session::state::open) {
-						const char *end_signal = "{\"end\": true}";
-						char *end_data = const_cast<char *>(end_signal);
-						size_t end_len = std::strlen(end_signal);
-						if (!send_request_frame(hdl_, end_data, end_len)) {
-							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send end signal failed uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-						}
-					}
+					last_activity = time(NULL);
 				} catch (const std::exception& e) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during end signal: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during audio processing: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
+					m_exit_ = 2;
+					break;
 				} catch (...) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during end signal uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					m_exit_ = 2;
+					break;
 				}
 			}
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : normal end exit uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			break;
-		}
-		else if (audio_len > 0)
-		{
-			// 安全复制音频数据到临时缓冲区
-			unsigned char temp_buf[MAX_PAYLOAD_SIZE + 1];
-			size_t temp_len = (audio_len > MAX_PAYLOAD_SIZE) ? MAX_PAYLOAD_SIZE : audio_len;
-			
-			// 安全的内存操作
-			memset(temp_buf, 0, sizeof(temp_buf));
-			if (temp_len > 0 && bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-				memcpy(temp_buf, g_audiobuf[bufidx_], temp_len);
-				g_audiobuf_len[bufidx_] = 0;
-			} else {
-				temp_len = 0;
-			}
-			
-			idx_Unlock();
-			
-			// 检查退出条件
-			if (m_exit_ == 1 || m_exit_ == 2 || temp_len == 0) {
-				if (m_exit_ != 0) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : exit signal during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-				}
-				break;
-			}
-			
-			// 安全检查连接状态
-			if (hdl_.expired()) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection expired during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-				m_exit_ = 2;
-				break;
-			}
-			
-			try {
-				client::connection_ptr con;
+				else
 				{
-					// 保护连接获取
-					con = ws_client_.get_con_from_hdl(hdl_);
+					idx_Unlock();
 				}
-				if (!con || con->get_state() != websocketpp::session::state::open) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not open during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-					m_exit_ = 2;
-					break;
-				}
-				
-				// 发送音频数据
-				asr_params_.req_idx = req_idx++;
-				if (!send_request_frame(hdl_, (char *)temp_buf, temp_len)) {
-					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : send audio failed, exiting uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-					m_exit_ = 2;
-					break;
-				}
-				// 更新活动时间
-				last_activity = time(NULL);
-			} catch (const std::exception& e) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : std::exception during audio processing: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
-				m_exit_ = 2;
-				break;
-			} catch (...) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : unknown exception during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-				m_exit_ = 2;
-				break;
+
+				usleep(40000);
 			}
-		}
-		else
-		{
-			idx_Unlock();
-		}
-		
-		usleep(40000);
-	}
-	
-		// 安全的线程退出清理
-	try {
-		if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-			try {
-				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
-				g_audiobuf_len[bufidx_] = 0; // 清空音频缓冲
-				memset(g_audiobuf[bufidx_], 0, MAX_PAYLOAD_SIZE + 1); // 清空缓冲区
-				idx_Unlock();
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : cleaned up channel state uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			} catch (...) {
-				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : exception during channel cleanup uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-				// 尽力释放锁
-				try { idx_Unlock(); } catch (...) {}
-			}
-		}
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : normal exit uuid[%s] bufidx[%d] count[%d]\n", uuid_.c_str(), bufidx_, req_idx);
-		m_exit_ = 1;
-	} catch (...) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "work_thread : exception during final cleanup uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-		m_exit_ = 2;
-	}
+
+				// 安全的线程退出清理
+				try {
+					if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
+						try {
+							idx_Lock();
+							g_user_channel_state[bufidx_] = 0;
+							myasr_audio_queue_release_locked(bufidx_);
+							idx_Unlock();
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : cleaned up channel state uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						} catch (...) {
+							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : exception during channel cleanup uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+						// 尽力释放锁
+						try { idx_Unlock(); } catch (...) {}
+					}
+				}
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : normal exit uuid[%s] bufidx[%d] count[%d]\n", uuid_.c_str(), bufidx_, req_idx);
+				m_exit_ = 1;
+				} catch (...) {
+					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "work_thread : exception during final cleanup uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+					m_exit_ = 2;
+				}
 	} catch (const websocketpp::exception& e) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "work_thread : caught websocketpp::exception uuid[%s] bufidx[%d]: %s\n", uuid_.empty() ? "unknown" : uuid_.c_str(), bufidx_, e.what());
 		m_exit_ = 2;
@@ -1313,12 +1408,11 @@ void wssclient::work_thread()
 	
 	// 统一的最终清理，确保在任何情况下都执行
 	if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-		try {
-			idx_Lock();
-			g_user_channel_state[bufidx_] = 0;
-			g_audiobuf_len[bufidx_] = 0;
-			memset(g_audiobuf[bufidx_], 0, MAX_PAYLOAD_SIZE + 1);
-			idx_Unlock();
+			try {
+				idx_Lock();
+				g_user_channel_state[bufidx_] = 0;
+				myasr_audio_queue_release_locked(bufidx_);
+				idx_Unlock();
 		} catch (...) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : final cleanup exception uuid[%s] bufidx[%d]\n", uuid_.empty() ? "unknown" : uuid_.c_str(), bufidx_);
 			try { idx_Unlock(); } catch (...) {}
@@ -1453,12 +1547,13 @@ static void *wss_client_run(void *arg)
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, " open websocket connection failed !!! bufidx=%d \n", wud->bufidx);
 			wud->connected = -1;
 			// 清理通道状态
-			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
-				idx_Lock();
-				g_user_channel_state[wud->bufidx] = 0;
-				idx_Unlock();
-			}
-			return 0;
+				if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+					idx_Lock();
+					g_user_channel_state[wud->bufidx] = 0;
+					myasr_audio_queue_release_locked(wud->bufidx);
+					idx_Unlock();
+				}
+				return 0;
 		}
 
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client run bufidx=%d\n", wud->bufidx);
@@ -1469,21 +1564,23 @@ static void *wss_client_run(void *arg)
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run exception: %s, bufidx=%d\n", e.what(), wud->bufidx);
 		wud->connected = -1;
 		// 清理通道状态
-		if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
-			idx_Lock();
-			g_user_channel_state[wud->bufidx] = 0;
-			idx_Unlock();
-		}
+			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+				idx_Lock();
+				g_user_channel_state[wud->bufidx] = 0;
+				myasr_audio_queue_release_locked(wud->bufidx);
+				idx_Unlock();
+			}
 	}
 	catch (...) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run unknown exception, bufidx=%d\n", wud->bufidx);
 		wud->connected = -1;
 		// 清理通道状态
-		if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
-			idx_Lock();
-			g_user_channel_state[wud->bufidx] = 0;
-			idx_Unlock();
-		}
+			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+				idx_Lock();
+				g_user_channel_state[wud->bufidx] = 0;
+				myasr_audio_queue_release_locked(wud->bufidx);
+				idx_Unlock();
+			}
 	}
 	
 	// 确保线程正常退出
@@ -1533,9 +1630,8 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 			}
 			else
 			{
-				idx_Lock();
-				g_audiobuf_len[aleg_idx] = 1;
-				idx_Unlock();
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr callback : drop invalid tail buffer len=%zu aleg_idx=%d\n",
+								  ud->aleg_buf_len, aleg_idx);
 			}
 
 			g_user_channel_state[aleg_idx] = 0;
@@ -1702,6 +1798,15 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 	}
 	aleg_wud->bufidx = aleg_idx;
 
+	if (myasr_audio_queue_prepare(aleg_idx) != SWITCH_TRUE)
+	{
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "prepare audio queue fail aleg_idx=%d\n", aleg_idx);
+		idx_Lock();
+		g_user_channel_state[aleg_idx] = 0;
+		idx_Unlock();
+		return;
+	}
+
 	// set ud param
 	ud->mode = nMode;
 	strncpy(ud->aleg_uuid, aleg_uuid, sizeof(ud->aleg_uuid) - 1);
@@ -1722,7 +1827,10 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 	if (err)
 	{
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mod_myasr -> create aleg wss thread fail err[%d]-%s \n", err, strerror(err));
+		idx_Lock();
 		g_user_channel_state[aleg_idx] = 0;
+		myasr_audio_queue_release_locked(aleg_idx);
+		idx_Unlock();
 		// aleg_wud is allocated by switch_core_session_alloc, no need to free manually
 		return;
 	}
@@ -1737,6 +1845,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 			// 清理通道状态
 			idx_Lock();
 			g_user_channel_state[aleg_idx] = 0;
+			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			return;
 		}
@@ -1746,6 +1855,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 			// 清理通道状态
 			idx_Lock();
 			g_user_channel_state[aleg_idx] = 0;
+			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			// 设置连接失败状态，让WebSocket线程知道需要退出
 			aleg_wud->connected = -1;
@@ -1760,7 +1870,10 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 		if ((status = switch_core_media_bug_add(session, "myasr", NULL, myasr_callback, ud, 0, SMBF_WRITE_STREAM | SMBF_NO_PAUSE, &(ud->bug))) != SWITCH_STATUS_SUCCESS)
 		{
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "media bug add fail\n");
+			idx_Lock();
 			g_user_channel_state[aleg_idx] = 0;
+			myasr_audio_queue_release_locked(aleg_idx);
+			idx_Unlock();
 			return;
 		}
 	}
@@ -1769,7 +1882,10 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 		if ((status = switch_core_media_bug_add(session, "myasr", NULL, myasr_callback, ud, 0, SMBF_READ_STREAM | SMBF_NO_PAUSE, &(ud->bug))) != SWITCH_STATUS_SUCCESS)
 		{
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "media bug add fail\n");
+			idx_Lock();
 			g_user_channel_state[aleg_idx] = 0;
+			myasr_audio_queue_release_locked(aleg_idx);
+			idx_Unlock();
 			return;
 		}
 	}
@@ -1815,12 +1931,15 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_myasr_shutdown)
 	g_app_shutdown = 0;
 	
 	// 清理所有通道状态，确保工作线程正确退出
+	idx_Lock();
 	for (int i = 0; i < MAX_USER_CHANNEL; i++) {
 		if (g_user_channel_state[i] == 1) {
 			g_user_channel_state[i] = 0;
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr_shutdown: cleaning channel %d\n", i);
 		}
+		myasr_audio_queue_release_locked(i);
 	}
+	idx_Unlock();
 	
 	// 给线程一些时间来清理
 	usleep(500000); // 500ms
