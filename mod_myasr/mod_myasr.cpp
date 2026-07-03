@@ -35,6 +35,7 @@ extern "C"
 
 #define MAX_PAYLOAD_SIZE 1280 // 1280
 #define MAX_USER_CHANNEL 10000
+#define MYASR_TARGET_SAMPLE_RATE 16000
 
 int g_app_shutdown = 0; // 1 mod_myasr_load, 0 mod_myasr_shutdown
 
@@ -63,6 +64,8 @@ struct user_data
 	int aleg_bufidx;
 
 	switch_audio_resampler_t *resampler;
+	uint32_t read_sample_rate;
+	int resample_unavailable_logged;
 };
 
 struct WsUserData
@@ -99,6 +102,117 @@ static struct
 	char *app_key;
 	char *wss_url;
 } globals;
+
+static void myasr_publish_audio_buffer(int aleg_idx, const char *data, size_t len)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || !data || len == 0)
+	{
+		return;
+	}
+
+	size_t publish_len = len > MAX_PAYLOAD_SIZE ? MAX_PAYLOAD_SIZE : len;
+	idx_Lock();
+	memset(g_audiobuf[aleg_idx], 0, sizeof(g_audiobuf[aleg_idx]));
+	memcpy(g_audiobuf[aleg_idx], data, publish_len);
+	g_audiobuf_len[aleg_idx] = publish_len;
+	idx_Unlock();
+}
+
+static void myasr_append_audio_buffer(struct user_data *ud, int aleg_idx, const char *data, size_t len)
+{
+	if (!ud || !data || len == 0 || aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL)
+	{
+		return;
+	}
+
+	size_t offset = 0;
+	while (offset < len)
+	{
+		if (ud->aleg_buf_len > MAX_PAYLOAD_SIZE)
+		{
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio buffer overflow state, reset len=%zu\n", ud->aleg_buf_len);
+			ud->aleg_buf_len = 0;
+			memset(ud->aleg_buf, 0, sizeof(ud->aleg_buf));
+		}
+
+		size_t space = MAX_PAYLOAD_SIZE - ud->aleg_buf_len;
+		if (space == 0)
+		{
+			myasr_publish_audio_buffer(aleg_idx, ud->aleg_buf, ud->aleg_buf_len);
+			ud->aleg_buf_len = 0;
+			memset(ud->aleg_buf, 0, sizeof(ud->aleg_buf));
+			space = MAX_PAYLOAD_SIZE;
+		}
+
+		size_t copy_len = len - offset;
+		if (copy_len > space)
+		{
+			copy_len = space;
+		}
+
+		memcpy(ud->aleg_buf + ud->aleg_buf_len, data + offset, copy_len);
+		ud->aleg_buf_len += copy_len;
+		offset += copy_len;
+
+		if (ud->aleg_buf_len == MAX_PAYLOAD_SIZE)
+		{
+			myasr_publish_audio_buffer(aleg_idx, ud->aleg_buf, ud->aleg_buf_len);
+			ud->aleg_buf_len = 0;
+			memset(ud->aleg_buf, 0, sizeof(ud->aleg_buf));
+		}
+	}
+}
+
+static switch_bool_t myasr_get_frame_audio_16k(struct user_data *ud, switch_frame_t *frame, const char **frame_data, size_t *frame_len)
+{
+	if (!ud || !frame || !frame->data || !frame_data || !frame_len || frame->datalen == 0)
+	{
+		return SWITCH_FALSE;
+	}
+
+	*frame_data = NULL;
+	*frame_len = 0;
+
+	uint32_t input_samples = (uint32_t)(frame->datalen / sizeof(int16_t));
+	if (input_samples == 0)
+	{
+		return SWITCH_FALSE;
+	}
+
+	if ((frame->datalen % sizeof(int16_t)) != 0)
+	{
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr resample : odd frame datalen=%u, ignore trailing byte\n",
+						  (unsigned int)frame->datalen);
+	}
+
+	if (ud->resampler)
+	{
+		uint32_t output_samples = switch_resample_process(ud->resampler, (int16_t *)frame->data, input_samples);
+		if (output_samples == 0 || !ud->resampler->to)
+		{
+			return SWITCH_FALSE;
+		}
+
+		*frame_data = (const char *)ud->resampler->to;
+		*frame_len = (size_t)output_samples * sizeof(int16_t);
+		return SWITCH_TRUE;
+	}
+
+	if (ud->read_sample_rate == MYASR_TARGET_SAMPLE_RATE)
+	{
+		*frame_data = (const char *)frame->data;
+		*frame_len = input_samples * sizeof(int16_t);
+		return SWITCH_TRUE;
+	}
+
+	if (!ud->resample_unavailable_logged)
+	{
+		ud->resample_unavailable_logged = 1;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr resample : resampler unavailable, drop frame input_rate=%u target_rate=%d\n",
+						  ud->read_sample_rate, MYASR_TARGET_SAMPLE_RATE);
+	}
+	return SWITCH_FALSE;
+}
 
 int GetKeyValue(const char *str, int addlen, const char *key, int maxlen, char *values)
 {
@@ -454,6 +568,10 @@ int getChannelIdx()
 wssclient::wssclient(const asr_params &params)
 {
 	asr_params_ = params;
+	if (asr_params_.sample_rate != 8000 && asr_params_.sample_rate != MYASR_TARGET_SAMPLE_RATE)
+	{
+		asr_params_.sample_rate = MYASR_TARGET_SAMPLE_RATE;
+	}
 	m_exit_ = -1;
 	work_thread_id_ = 0;
 	
@@ -501,7 +619,9 @@ string wssclient::gen_json_request(const std::string &token, const asr_params &p
 
 	string json_asr_params = "{\"access_token\":\"";
 	json_asr_params += token;
-	json_asr_params += "\",\"version\":\"1.0\",\"asr_params\":{\"audio_format\":\"pcm\",\"sample_rate\":8000,\"req_idx\":";
+	json_asr_params += "\",\"version\":\"1.0\",\"asr_params\":{\"audio_format\":\"pcm\",\"sample_rate\":";
+	json_asr_params += std::to_string(params.sample_rate);
+	json_asr_params += ",\"req_idx\":";
 	json_asr_params += std::to_string(params.req_idx);
 	json_asr_params += ",\"speech_type\":1,\"add_pct\":true,\"domain\":\"common\",\"audio_data\":\"";
 	json_asr_params += params.audio_data;
@@ -1290,6 +1410,7 @@ static void *wss_client_run(void *arg)
 	asr_params params;
 	// 根据自己音频格式具体设置
 	params.audio_format = "pcm";
+	params.sample_rate = MYASR_TARGET_SAMPLE_RATE;
 
 	char tempStr[200] = {0};
 	unsigned char digest[EVP_MAX_MD_SIZE] = {'\0'};
@@ -1388,12 +1509,16 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 	case SWITCH_ABC_TYPE_INIT:
 	{
 		switch_core_session_get_read_impl(session, &read_impl);
-		status = switch_resample_create(&ud->resampler, read_impl.actual_samples_per_second, 16000, 640, SWITCH_RESAMPLE_QUALITY, 1);
+		ud->read_sample_rate = read_impl.actual_samples_per_second;
+		status = switch_resample_create(&ud->resampler, read_impl.actual_samples_per_second, MYASR_TARGET_SAMPLE_RATE, 640, SWITCH_RESAMPLE_QUALITY, 1);
 		if (status != SWITCH_STATUS_SUCCESS)
 		{
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler\n");
+			ud->resampler = NULL;
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler from %u to %d\n",
+							  ud->read_sample_rate, MYASR_TARGET_SAMPLE_RATE);
 		}
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr callback : init aleg_idx=%d aleg_uuid=%s\n", aleg_idx, ud->aleg_uuid);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr callback : init aleg_idx=%d aleg_uuid=%s input_rate=%u target_rate=%d\n",
+						  aleg_idx, ud->aleg_uuid, ud->read_sample_rate, MYASR_TARGET_SAMPLE_RATE);
 	}
 	break;
 
@@ -1404,13 +1529,13 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 		{
 			if (ud->aleg_buf_len <= MAX_PAYLOAD_SIZE)
 			{
-				memset(g_audiobuf[aleg_idx], 0, sizeof(g_audiobuf[aleg_idx]));
-				memcpy(g_audiobuf[aleg_idx], ud->aleg_buf, ud->aleg_buf_len);
-				g_audiobuf_len[aleg_idx] = ud->aleg_buf_len;
+				myasr_publish_audio_buffer(aleg_idx, ud->aleg_buf, ud->aleg_buf_len);
 			}
 			else
 			{
+				idx_Lock();
 				g_audiobuf_len[aleg_idx] = 1;
+				idx_Unlock();
 			}
 
 			g_user_channel_state[aleg_idx] = 0;
@@ -1440,42 +1565,11 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 
 		if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) == SWITCH_STATUS_SUCCESS && !switch_test_flag((&frame), SFF_CNG) && frame.datalen)
 		{
-			// 上采样至16K
-			switch_resample_process(ud->resampler, (int16_t *)frame.data, frame.datalen);
-			char *frame_data = (char *)ud->resampler->to;
-			size_t frame_len = ud->resampler->to_len;
-
-			if (ud->aleg_buf_len + frame_len < MAX_PAYLOAD_SIZE)
+			const char *frame_data = NULL;
+			size_t frame_len = 0;
+			if (myasr_get_frame_audio_16k(ud, &frame, &frame_data, &frame_len))
 			{
-				memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, frame_len);
-				ud->aleg_buf_len += frame_len;
-			}
-			else
-			{
-				int nLen1 = MAX_PAYLOAD_SIZE - ud->aleg_buf_len;
-				int nLen2 = frame_len - nLen1;
-				if (ud->aleg_buf_len + frame_len == MAX_PAYLOAD_SIZE)
-				{
-					memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, frame_len);
-					ud->aleg_buf_len += frame_len;
-				}
-				else
-				{
-					memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, nLen1);
-					ud->aleg_buf_len += nLen1;
-				}
-				memset(g_audiobuf[aleg_idx], 0, sizeof(g_audiobuf[aleg_idx]));
-				memcpy(g_audiobuf[aleg_idx], ud->aleg_buf, ud->aleg_buf_len);
-				g_audiobuf_len[aleg_idx] = ud->aleg_buf_len;
-
-				ud->aleg_buf_len = 0;
-				memset(ud->aleg_buf, 0, sizeof(ud->aleg_buf));
-
-				if (nLen2 > 0)
-				{
-					memcpy(ud->aleg_buf, frame_data + nLen1, nLen2);
-					ud->aleg_buf_len = nLen2;
-				}
+				myasr_append_audio_buffer(ud, aleg_idx, frame_data, frame_len);
 			}
 		}
 	}
@@ -1496,41 +1590,11 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 
 		if (switch_core_media_bug_read(bug, &frame, SWITCH_FALSE) == SWITCH_STATUS_SUCCESS && !switch_test_flag((&frame), SFF_CNG) && frame.datalen)
 		{
-			switch_resample_process(ud->resampler, (int16_t *)frame.data, frame.datalen);
-			char *frame_data = (char *)ud->resampler->to;
-			size_t frame_len = ud->resampler->to_len;
-
-			if (ud->aleg_buf_len + frame_len < MAX_PAYLOAD_SIZE)
+			const char *frame_data = NULL;
+			size_t frame_len = 0;
+			if (myasr_get_frame_audio_16k(ud, &frame, &frame_data, &frame_len))
 			{
-				memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, frame_len);
-				ud->aleg_buf_len += frame_len;
-			}
-			else
-			{
-				int nLen1 = MAX_PAYLOAD_SIZE - ud->aleg_buf_len;
-				int nLen2 = frame_len - nLen1;
-				if (ud->aleg_buf_len + frame_len == MAX_PAYLOAD_SIZE)
-				{
-					memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, frame_len);
-					ud->aleg_buf_len += frame_len;
-				}
-				else
-				{
-					memcpy(ud->aleg_buf + ud->aleg_buf_len, frame_data, nLen1);
-					ud->aleg_buf_len += nLen1;
-				}
-				memset(g_audiobuf[aleg_idx], 0, sizeof(g_audiobuf[aleg_idx]));
-				memcpy(g_audiobuf[aleg_idx], ud->aleg_buf, ud->aleg_buf_len);
-				g_audiobuf_len[aleg_idx] = ud->aleg_buf_len;
-
-				ud->aleg_buf_len = 0;
-				memset(ud->aleg_buf, 0, sizeof(ud->aleg_buf));
-
-				if (nLen2 > 0)
-				{
-					memcpy(ud->aleg_buf, frame_data + nLen1, nLen2);
-					ud->aleg_buf_len = nLen2;
-				}
+				myasr_append_audio_buffer(ud, aleg_idx, frame_data, frame_len);
 			}
 		}
 	}
