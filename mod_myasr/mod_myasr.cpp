@@ -37,10 +37,13 @@ extern "C"
 #define MAX_USER_CHANNEL 10000
 #define MYASR_AUDIO_QUEUE_SIZE 8
 #define MYASR_TARGET_SAMPLE_RATE 16000
+#define MYASR_CHANNEL_FREE 0
+#define MYASR_CHANNEL_RUNNING 1
+#define MYASR_CHANNEL_STOPPING 2
 
 int g_app_shutdown = 0; // 1 mod_myasr_load, 0 mod_myasr_shutdown
 
-int g_user_channel_state[MAX_USER_CHANNEL] = {0}; // 0 stop, 1 run
+int g_user_channel_state[MAX_USER_CHANNEL] = {0}; // 0 free, 1 running, 2 stopping
 time_t g_timeout[MAX_USER_CHANNEL] = {0};
 int g_nCurr_channel_index = 0;
 
@@ -61,6 +64,19 @@ pthread_mutex_t idx_mutex;
 int idx_Lock() { return pthread_mutex_lock(&idx_mutex); }
 int idx_Unlock() { return pthread_mutex_unlock(&idx_mutex); }
 int idx_TryLock() { return pthread_mutex_trylock(&idx_mutex); }
+
+static switch_bool_t myasr_channel_is_running(int aleg_idx)
+{
+	if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL)
+	{
+		return SWITCH_FALSE;
+	}
+
+	idx_Lock();
+	switch_bool_t running = g_user_channel_state[aleg_idx] == MYASR_CHANNEL_RUNNING ? SWITCH_TRUE : SWITCH_FALSE;
+	idx_Unlock();
+	return running;
+}
 
 struct user_data
 {
@@ -155,10 +171,9 @@ static void myasr_audio_queue_release_locked(int aleg_idx)
 	}
 
 	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
-	g_audio_queues[aleg_idx] = NULL;
 	if (queue)
 	{
-		free(queue);
+		myasr_audio_queue_reset_locked(queue);
 	}
 }
 
@@ -172,6 +187,13 @@ static size_t myasr_audio_queue_peek_len_locked(int aleg_idx)
 	myasr_audio_queue *queue = g_audio_queues[aleg_idx];
 	if (!queue || queue->count == 0)
 	{
+		return 0;
+	}
+	if (queue->count > MYASR_AUDIO_QUEUE_SIZE || queue->head >= MYASR_AUDIO_QUEUE_SIZE || queue->tail >= MYASR_AUDIO_QUEUE_SIZE)
+	{
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio queue invalid state on peek aleg_idx=%d count=%u head=%u tail=%u, reset\n",
+						  aleg_idx, queue->count, queue->head, queue->tail);
+		myasr_audio_queue_reset_locked(queue);
 		return 0;
 	}
 
@@ -190,15 +212,30 @@ static size_t myasr_audio_queue_pop_locked(int aleg_idx, unsigned char *out, siz
 	{
 		return 0;
 	}
+	if (queue->count > MYASR_AUDIO_QUEUE_SIZE || queue->head >= MYASR_AUDIO_QUEUE_SIZE || queue->tail >= MYASR_AUDIO_QUEUE_SIZE)
+	{
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio queue invalid state on pop aleg_idx=%d count=%u head=%u tail=%u, reset\n",
+						  aleg_idx, queue->count, queue->head, queue->tail);
+		myasr_audio_queue_reset_locked(queue);
+		return 0;
+	}
 
 	uint32_t slot = queue->head;
 	size_t len = queue->len[slot];
-	if (len > out_size)
+	if (len > MAX_PAYLOAD_SIZE)
+	{
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio queue invalid packet len=%zu aleg_idx=%d, drop\n", len, aleg_idx);
+		len = 0;
+	}
+	else if (len > out_size)
 	{
 		len = out_size;
 	}
 
-	memcpy(out, queue->data[slot], len);
+	if (len > 0)
+	{
+		memcpy(out, queue->data[slot], len);
+	}
 	memset(queue->data[slot], 0, sizeof(queue->data[slot]));
 	queue->len[slot] = 0;
 	queue->head = (queue->head + 1) % MYASR_AUDIO_QUEUE_SIZE;
@@ -220,6 +257,12 @@ static void myasr_publish_audio_buffer(int aleg_idx, const char *data, size_t le
 	{
 		idx_Unlock();
 		return;
+	}
+	if (queue->count > MYASR_AUDIO_QUEUE_SIZE || queue->head >= MYASR_AUDIO_QUEUE_SIZE || queue->tail >= MYASR_AUDIO_QUEUE_SIZE)
+	{
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "myasr audio queue invalid state on push aleg_idx=%d count=%u head=%u tail=%u, reset\n",
+						  aleg_idx, queue->count, queue->head, queue->tail);
+		myasr_audio_queue_reset_locked(queue);
 	}
 
 	if (queue->count == MYASR_AUDIO_QUEUE_SIZE)
@@ -644,9 +687,9 @@ int getChannelIdx()
 	int nFindIdx = -1;
 	for (i = g_nCurr_channel_index; i < MAX_USER_CHANNEL; i++)
 	{
-		if (g_user_channel_state[i] == 0)
+		if (g_user_channel_state[i] == MYASR_CHANNEL_FREE)
 		{
-			g_user_channel_state[i] = 1;
+			g_user_channel_state[i] = MYASR_CHANNEL_RUNNING;
 			g_nCurr_channel_index = i;
 			nFindIdx = i;
 			g_timeout[i] = time(NULL);
@@ -657,9 +700,9 @@ int getChannelIdx()
 	{
 		for (i = 0; i < MAX_USER_CHANNEL; i++)
 		{
-			if (g_user_channel_state[i] == 0)
+			if (g_user_channel_state[i] == MYASR_CHANNEL_FREE)
 			{
-				g_user_channel_state[i] = 1;
+				g_user_channel_state[i] = MYASR_CHANNEL_RUNNING;
 				g_nCurr_channel_index = i;
 				nFindIdx = i;
 				g_timeout[i] = time(NULL);
@@ -672,9 +715,10 @@ int getChannelIdx()
 		time_t now = time(NULL);
 		for (i = 0; i < MAX_USER_CHANNEL; i++)
 		{
-			if (g_user_channel_state[i] == 1 && (now - g_timeout[i] > 3600 * 2))
+			if (g_user_channel_state[i] == MYASR_CHANNEL_RUNNING && (now - g_timeout[i] > 3600 * 2))
 			{
-				g_user_channel_state[i] = 1;
+				myasr_audio_queue_release_locked(i);
+				g_user_channel_state[i] = MYASR_CHANNEL_RUNNING;
 				g_nCurr_channel_index = i;
 				nFindIdx = i;
 				g_timeout[i] = time(NULL);
@@ -1048,7 +1092,7 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 		if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 			try {
 				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
+				g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 				myasr_audio_queue_release_locked(bufidx_);
 				idx_Unlock();
 			} catch (...) {
@@ -1078,7 +1122,7 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 		} catch (...) {}
 		try {
 			if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
-				try { idx_Lock(); g_user_channel_state[bufidx_] = 0; idx_Unlock(); } catch (...) { try { idx_Unlock(); } catch (...) {} }
+				try { idx_Lock(); g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE; idx_Unlock(); } catch (...) { try { idx_Unlock(); } catch (...) {} }
 			}
 		} catch (...) {}
 	}
@@ -1209,7 +1253,7 @@ void wssclient::work_thread()
 				break;
 			}
 
-			if (channel_state == 0)
+			if (channel_state != MYASR_CHANNEL_RUNNING)
 			{
 				// 通道已停止，先把队列里的剩余音频按顺序发完，再发送结束信号。
 				if (audio_len > 0)
@@ -1340,7 +1384,7 @@ void wssclient::work_thread()
 					if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 						try {
 							idx_Lock();
-							g_user_channel_state[bufidx_] = 0;
+							g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 							myasr_audio_queue_release_locked(bufidx_);
 							idx_Unlock();
 							switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "work_thread : cleaned up channel state uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
@@ -1366,7 +1410,7 @@ void wssclient::work_thread()
 		if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 			try {
 				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
+				g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 				idx_Unlock();
 			} catch (...) {
 				try { idx_Unlock(); } catch (...) {}
@@ -1382,7 +1426,7 @@ void wssclient::work_thread()
 		if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 			try {
 				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
+				g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 				idx_Unlock();
 			} catch (...) {
 				try { idx_Unlock(); } catch (...) {}
@@ -1398,7 +1442,7 @@ void wssclient::work_thread()
 		if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 			try {
 				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
+				g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 				idx_Unlock();
 			} catch (...) {
 				try { idx_Unlock(); } catch (...) {}
@@ -1410,7 +1454,7 @@ void wssclient::work_thread()
 	if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
 			try {
 				idx_Lock();
-				g_user_channel_state[bufidx_] = 0;
+				g_user_channel_state[bufidx_] = MYASR_CHANNEL_FREE;
 				myasr_audio_queue_release_locked(bufidx_);
 				idx_Unlock();
 		} catch (...) {
@@ -1549,7 +1593,7 @@ static void *wss_client_run(void *arg)
 			// 清理通道状态
 				if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
 					idx_Lock();
-					g_user_channel_state[wud->bufidx] = 0;
+					g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
 					myasr_audio_queue_release_locked(wud->bufidx);
 					idx_Unlock();
 				}
@@ -1566,7 +1610,7 @@ static void *wss_client_run(void *arg)
 		// 清理通道状态
 			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
 				idx_Lock();
-				g_user_channel_state[wud->bufidx] = 0;
+				g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
 				myasr_audio_queue_release_locked(wud->bufidx);
 				idx_Unlock();
 			}
@@ -1577,7 +1621,7 @@ static void *wss_client_run(void *arg)
 		// 清理通道状态
 			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
 				idx_Lock();
-				g_user_channel_state[wud->bufidx] = 0;
+				g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
 				myasr_audio_queue_release_locked(wud->bufidx);
 				idx_Unlock();
 			}
@@ -1634,8 +1678,10 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 								  ud->aleg_buf_len, aleg_idx);
 			}
 
-			g_user_channel_state[aleg_idx] = 0;
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr callback : stop1 aleg_idx=%d aleg_uuid=%s\n", aleg_idx, ud->aleg_uuid);
+				idx_Lock();
+				g_user_channel_state[aleg_idx] = MYASR_CHANNEL_STOPPING;
+				idx_Unlock();
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr callback : stop1 aleg_idx=%d aleg_uuid=%s\n", aleg_idx, ud->aleg_uuid);
 			// EndAsr(ud->aleg_uuid);
 		}
 
@@ -1651,7 +1697,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 		uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
 		switch_frame_t frame = {0};
 
-		if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || g_user_channel_state[aleg_idx] == 0)
+		if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || myasr_channel_is_running(aleg_idx) != SWITCH_TRUE)
 		{
 			break;
 		}
@@ -1676,7 +1722,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 		uint8_t data[SWITCH_RECOMMENDED_BUFFER_SIZE];
 		switch_frame_t frame = {0};
 
-		if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || g_user_channel_state[aleg_idx] == 0)
+		if (aleg_idx < 0 || aleg_idx >= MAX_USER_CHANNEL || myasr_channel_is_running(aleg_idx) != SWITCH_TRUE)
 		{
 			break;
 		}
@@ -1802,7 +1848,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 	{
 		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "prepare audio queue fail aleg_idx=%d\n", aleg_idx);
 		idx_Lock();
-		g_user_channel_state[aleg_idx] = 0;
+		g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 		idx_Unlock();
 		return;
 	}
@@ -1828,7 +1874,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 	{
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "mod_myasr -> create aleg wss thread fail err[%d]-%s \n", err, strerror(err));
 		idx_Lock();
-		g_user_channel_state[aleg_idx] = 0;
+		g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 		myasr_audio_queue_release_locked(aleg_idx);
 		idx_Unlock();
 		// aleg_wud is allocated by switch_core_session_alloc, no need to free manually
@@ -1844,7 +1890,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "wss client connect fail aleg_idx=%d aleg_uuid=%s, cleaning up channel state\n", aleg_idx, aleg_uuid);
 			// 清理通道状态
 			idx_Lock();
-			g_user_channel_state[aleg_idx] = 0;
+			g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			return;
@@ -1854,7 +1900,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "wss client connect timeout aleg_idx=%d aleg_uuid=%s, cleaning up channel state\n", aleg_idx, aleg_uuid);
 			// 清理通道状态
 			idx_Lock();
-			g_user_channel_state[aleg_idx] = 0;
+			g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			// 设置连接失败状态，让WebSocket线程知道需要退出
@@ -1871,7 +1917,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 		{
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "media bug add fail\n");
 			idx_Lock();
-			g_user_channel_state[aleg_idx] = 0;
+			g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			return;
@@ -1883,7 +1929,7 @@ SWITCH_STANDARD_APP(start_asr_session_function)
 		{
 			switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_WARNING, "media bug add fail\n");
 			idx_Lock();
-			g_user_channel_state[aleg_idx] = 0;
+			g_user_channel_state[aleg_idx] = MYASR_CHANNEL_FREE;
 			myasr_audio_queue_release_locked(aleg_idx);
 			idx_Unlock();
 			return;
@@ -1933,8 +1979,8 @@ SWITCH_MODULE_SHUTDOWN_FUNCTION(mod_myasr_shutdown)
 	// 清理所有通道状态，确保工作线程正确退出
 	idx_Lock();
 	for (int i = 0; i < MAX_USER_CHANNEL; i++) {
-		if (g_user_channel_state[i] == 1) {
-			g_user_channel_state[i] = 0;
+		if (g_user_channel_state[i] == MYASR_CHANNEL_RUNNING) {
+			g_user_channel_state[i] = MYASR_CHANNEL_FREE;
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr_shutdown: cleaning channel %d\n", i);
 		}
 		myasr_audio_queue_release_locked(i);
