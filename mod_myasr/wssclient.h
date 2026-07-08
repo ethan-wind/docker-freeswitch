@@ -77,7 +77,7 @@ public:
     wssclient(const asr_params &params);
     virtual ~wssclient();
     void run();
-    bool open_connection(const std::string &uri, int *connected = NULL);
+    bool open_connection(const std::string &uri, volatile int *connected = NULL);
     // void send_request_frame(websocketpp::connection_hdl hdl, const std::string& data);
     bool send_request_frame(websocketpp::connection_hdl hdl, char *data, int datalen);
     void stop_io_service();
@@ -110,7 +110,7 @@ public:
     int bufidx_;
     time_t timeout_;
     int m_exit_;     //-1 init 1 exit, 0 run
-    int *connected_; // 0 not connected, 1 connected
+    volatile int *connected_; // 0 not connected, 1 connected
     pthread_t work_thread_id_; // 工作线程ID用于清理
 };
 
