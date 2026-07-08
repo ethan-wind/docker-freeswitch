@@ -742,6 +742,7 @@ wssclient::wssclient(const asr_params &params)
 		asr_params_.sample_rate = MYASR_TARGET_SAMPLE_RATE;
 	}
 	m_exit_ = -1;
+	connected_ = NULL;
 	work_thread_id_ = 0;
 	
 	// 初始化pthread_mutex_t
@@ -1039,11 +1040,9 @@ static void *wssclient_work_thread_wrapper(void *arg)
 void wssclient::on_open(websocketpp::connection_hdl hdl)
 {
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_open : uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-	if (connected_)
-	{
-		*connected_ = 1;
-	}
 	hdl_ = hdl;
+	int *connected = connected_;
+	connected_ = NULL;
 	
 	// 使用pthread替代boost::thread，避免boost 1.63.0的线程问题
 	pthread_t work_thread_id;
@@ -1057,12 +1056,15 @@ void wssclient::on_open(websocketpp::connection_hdl hdl)
 	if (ret != 0) {
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "on_open : failed to create pthread uuid[%s] bufidx[%d] error: %d\n", uuid_.c_str(), bufidx_, ret);
 		m_exit_ = 1;
-		if (connected_) {
-			*connected_ = -1;
+		if (connected) {
+			*connected = -1;
 		}
 	} else {
 		// 存储线程ID，稍后用于清理
 		work_thread_id_ = work_thread_id;
+		if (connected) {
+			*connected = 1;
+		}
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_open : pthread created successfully uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 	}
 }
@@ -1086,6 +1088,7 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 		m_exit_ = 2;
 		if (connected_ && connected_ != (int*)-1) {
 			*connected_ = -1;
+			connected_ = NULL;
 		}
 		
 		// 安全清理通道状态
@@ -1118,7 +1121,10 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 		m_exit_ = 2;
 		// 尽最大努力清理状态
 		try {
-			if (connected_ && connected_ != (int*)-1) *connected_ = -1;
+			if (connected_ && connected_ != (int*)-1) {
+				*connected_ = -1;
+				connected_ = NULL;
+			}
 		} catch (...) {}
 		try {
 			if (bufidx_ >= 0 && bufidx_ < MAX_USER_CHANNEL) {
@@ -1540,9 +1546,17 @@ static void *wss_client_run(void *arg)
 		pthread_exit(NULL);
 		return 0;
 	}
-	
-	// 初始化连接状态为失败，防止主线程无限等待
-	wud->connected = -1;
+
+	const int local_bufidx = wud->bufidx;
+	char local_uuid[sizeof(wud->uuid)] = {0};
+	char local_leg[sizeof(wud->leg)] = {0};
+	char local_custom_appid[sizeof(wud->custom_appid)] = {0};
+	strncpy(local_uuid, wud->uuid, sizeof(local_uuid) - 1);
+	strncpy(local_leg, wud->leg, sizeof(local_leg) - 1);
+	strncpy(local_custom_appid, wud->custom_appid, sizeof(local_custom_appid) - 1);
+
+	// 初始化为连接中，只有明确失败路径才置为 -1，避免主线程误判失败。
+	wud->connected = 0;
 	
 	// init websocket client
 	asr_params params;
@@ -1572,63 +1586,61 @@ static void *wss_client_run(void *arg)
 	std::string signaEncode = urlencode(signa);
 	
 	// 决定使用哪个appid：如果有自定义appid则使用，否则使用默认的
-	char *url_appid = (strlen(wud->custom_appid) > 0) ? wud->custom_appid : appid;
+	char *url_appid = (strlen(local_custom_appid) > 0) ? local_custom_appid : appid;
 	// snprintf(url, sizeof(url), "wss://dev1-asr.useasy.cn/v1/ws?appid=%s&ts=%ld&signa=%s", url_appid, (long)timeStamp, signaEncode.c_str());
 	snprintf(url, sizeof(url), "%s?appid=%s&ts=%ld&signa=%s", globals.wss_url, url_appid, (long)timeStamp, signaEncode.c_str());
 	std::string ws_url = url;
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client begin connect url=%s bufidx=%d using appid=%s\n", ws_url.c_str(), wud->bufidx, url_appid);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client begin connect url=%s bufidx=%d using appid=%s\n", ws_url.c_str(), local_bufidx, url_appid);
 
 	// 启动websocket client
 	try {
 		wssclient ws_client(params);
-		ws_client.uuid_ = wud->uuid;
-		ws_client.leg_ = wud->leg;
-		ws_client.bufidx_ = wud->bufidx;
+		ws_client.uuid_ = local_uuid;
+		ws_client.leg_ = local_leg;
+		ws_client.bufidx_ = local_bufidx;
 		
 		// 尝试连接WebSocket服务器
 		if (!ws_client.open_connection(ws_url, &wud->connected))
 		{
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, " open websocket connection failed !!! bufidx=%d \n", wud->bufidx);
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, " open websocket connection failed !!! bufidx=%d \n", local_bufidx);
 			wud->connected = -1;
 			// 清理通道状态
-				if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+				if (local_bufidx >= 0 && local_bufidx < MAX_USER_CHANNEL) {
 					idx_Lock();
-					g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
-					myasr_audio_queue_release_locked(wud->bufidx);
+					g_user_channel_state[local_bufidx] = MYASR_CHANNEL_FREE;
+					myasr_audio_queue_release_locked(local_bufidx);
 					idx_Unlock();
 				}
 				return 0;
 		}
 
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client run bufidx=%d\n", wud->bufidx);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client run bufidx=%d\n", local_bufidx);
 		ws_client.run();
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client end bufidx=%d\n", wud->bufidx);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, " wss client end bufidx=%d\n", local_bufidx);
 	}
 	catch (const std::exception& e) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run exception: %s, bufidx=%d\n", e.what(), wud->bufidx);
-		wud->connected = -1;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run exception: %s, bufidx=%d\n", e.what(), local_bufidx);
 		// 清理通道状态
-			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+			if (local_bufidx >= 0 && local_bufidx < MAX_USER_CHANNEL) {
 				idx_Lock();
-				g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
-				myasr_audio_queue_release_locked(wud->bufidx);
+				g_user_channel_state[local_bufidx] = MYASR_CHANNEL_FREE;
+				myasr_audio_queue_release_locked(local_bufidx);
 				idx_Unlock();
 			}
 	}
 	catch (...) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run unknown exception, bufidx=%d\n", wud->bufidx);
-		wud->connected = -1;
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run unknown exception, bufidx=%d\n", local_bufidx);
 		// 清理通道状态
-			if (wud->bufidx >= 0 && wud->bufidx < MAX_USER_CHANNEL) {
+			if (local_bufidx >= 0 && local_bufidx < MAX_USER_CHANNEL) {
 				idx_Lock();
-				g_user_channel_state[wud->bufidx] = MYASR_CHANNEL_FREE;
-				myasr_audio_queue_release_locked(wud->bufidx);
+				g_user_channel_state[local_bufidx] = MYASR_CHANNEL_FREE;
+				myasr_audio_queue_release_locked(local_bufidx);
 				idx_Unlock();
 			}
 	}
-	
+
 	// 确保线程正常退出
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wss_client_run thread exit, bufidx=%d\n", wud->bufidx);
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wss_client_run thread exit, bufidx=%d\n", local_bufidx);
 	pthread_exit(NULL);
 	return 0;
 }
