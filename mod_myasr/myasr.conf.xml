@@ -2,6 +2,6 @@
     <settings>
 		 <param name="app_id" value="your_app_id"/>
 		 <param name="app_key" value="your_app_key"/>
-		 <param name="wss_url" value="wss://rtasr.xfyun.cn/v1/ws"/>
+		 <param name="ws_url" value="ws://rtasr.xfyun.cn/v1/ws"/>
    </settings>
 </configuration>

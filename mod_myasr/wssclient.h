@@ -20,15 +20,17 @@
 #endif
 
 #include <websocketpp/config/asio_client.hpp>
+#include <websocketpp/config/asio_no_tls_client.hpp>
 #include <websocketpp/client.hpp>
 #include <string>
 #include <list>
 #include <pthread.h>
 
-typedef websocketpp::client<websocketpp::config::asio_tls_client> client;
-typedef websocketpp::config::asio_tls_client::message_type::ptr message_ptr;
+typedef websocketpp::client<websocketpp::config::asio_tls_client> tls_client;
+typedef websocketpp::client<websocketpp::config::asio_client> plain_client;
+typedef websocketpp::config::asio_tls_client::message_type::ptr tls_message_ptr;
+typedef websocketpp::config::asio_client::message_type::ptr plain_message_ptr;
 typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> context_ptr;
-typedef client::connection_ptr connection_ptr;
 
 struct asr_params
 {
@@ -88,16 +90,19 @@ protected:
     void on_open(websocketpp::connection_hdl hdl);
     void on_close(websocketpp::connection_hdl hdl);
     void on_fail(websocketpp::connection_hdl hdl);
-    void on_message(websocketpp::connection_hdl hdl, message_ptr msg);
+    void on_tls_message(websocketpp::connection_hdl hdl, tls_message_ptr msg);
+    void on_plain_message(websocketpp::connection_hdl hdl, plain_message_ptr msg);
 
 public:
     void work_thread();
     
 private:
     void recv_asr_realtime_msg(const std::string &msg);
+    bool connection_is_open(websocketpp::connection_hdl hdl);
 
 public:
-    client ws_client_;
+    tls_client tls_client_;
+    plain_client plain_client_;
     websocketpp::connection_hdl hdl_;
     pthread_mutex_t hdl_mutex_;
     //    boost::thread*                      work_thread_;
@@ -110,6 +115,7 @@ public:
     int bufidx_;
     time_t timeout_;
     int m_exit_;     //-1 init 1 exit, 0 run
+    bool use_tls_;
     volatile int *connected_; // 0 not connected, 1 connected
     pthread_t work_thread_id_; // 工作线程ID用于清理
 };

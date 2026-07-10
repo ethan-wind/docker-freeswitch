@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <sstream>
+#include <cctype>
 #include <time.h>
 #include <pthread.h>
 #include <openssl/hmac.h>
@@ -486,7 +487,7 @@ static switch_status_t load_mymedia_config(switch_memory_pool_t *pool)
 				globals.app_id = switch_core_strdup(pool, value);
 			else if (!strcmp(name, "app_key"))
 				globals.app_key = switch_core_strdup(pool, value);
-			else if (!strcmp(name, "wss_url"))
+			else if (!strcmp(name, "wss_url") || !strcmp(name, "ws_url"))
 				globals.wss_url = switch_core_strdup(pool, value);
 		}
 	}
@@ -795,24 +796,31 @@ wssclient::wssclient(const asr_params &params)
 		asr_params_.sample_rate = MYASR_TARGET_SAMPLE_RATE;
 	}
 	m_exit_ = -1;
+	use_tls_ = true;
 	connected_ = NULL;
 	work_thread_id_ = 0;
 	
 	// 初始化pthread_mutex_t
 	pthread_mutex_init(&hdl_mutex_, NULL);
 	
-	ws_client_.set_access_channels(websocketpp::log::alevel::all);
-	ws_client_.clear_access_channels(websocketpp::log::alevel::frame_payload);
-	ws_client_.set_error_channels(websocketpp::log::elevel::all);
+	tls_client_.clear_access_channels(websocketpp::log::alevel::all);
+	tls_client_.set_error_channels(websocketpp::log::elevel::all);
+	tls_client_.init_asio();
+	tls_client_.set_open_handshake_timeout(5000);
+	tls_client_.set_tls_init_handler(bind(&wssclient::on_tls_init, this, websocketpp::lib::placeholders::_1));
+	tls_client_.set_open_handler(bind(&wssclient::on_open, this, websocketpp::lib::placeholders::_1));
+	tls_client_.set_close_handler(bind(&wssclient::on_close, this, websocketpp::lib::placeholders::_1));
+	tls_client_.set_fail_handler(bind(&wssclient::on_fail, this, websocketpp::lib::placeholders::_1));
+	tls_client_.set_message_handler(bind(&wssclient::on_tls_message, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
 
-	ws_client_.init_asio();
-	ws_client_.set_open_handshake_timeout(5000);
-
-	ws_client_.set_tls_init_handler(bind(&wssclient::on_tls_init, this, websocketpp::lib::placeholders::_1));
-	ws_client_.set_open_handler(bind(&wssclient::on_open, this, websocketpp::lib::placeholders::_1));
-	ws_client_.set_close_handler(bind(&wssclient::on_close, this, websocketpp::lib::placeholders::_1));
-	ws_client_.set_fail_handler(bind(&wssclient::on_fail, this, websocketpp::lib::placeholders::_1));
-	ws_client_.set_message_handler(bind(&wssclient::on_message, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
+	plain_client_.clear_access_channels(websocketpp::log::alevel::all);
+	plain_client_.set_error_channels(websocketpp::log::elevel::all);
+	plain_client_.init_asio();
+	plain_client_.set_open_handshake_timeout(5000);
+	plain_client_.set_open_handler(bind(&wssclient::on_open, this, websocketpp::lib::placeholders::_1));
+	plain_client_.set_close_handler(bind(&wssclient::on_close, this, websocketpp::lib::placeholders::_1));
+	plain_client_.set_fail_handler(bind(&wssclient::on_fail, this, websocketpp::lib::placeholders::_1));
+	plain_client_.set_message_handler(bind(&wssclient::on_plain_message, this, websocketpp::lib::placeholders::_1, websocketpp::lib::placeholders::_2));
 }
 
 wssclient::~wssclient()
@@ -863,6 +871,29 @@ void wssclient::recv_asr_realtime_msg(const std::string &msg)
 	handle_message(uuid_.c_str(), msg);
 }
 
+bool wssclient::connection_is_open(websocketpp::connection_hdl hdl)
+{
+	if (hdl.expired())
+	{
+		return false;
+	}
+
+	try {
+		if (use_tls_) {
+			tls_client::connection_ptr con = tls_client_.get_con_from_hdl(hdl);
+			return con && con->get_state() == websocketpp::session::state::open;
+		}
+
+		plain_client::connection_ptr con = plain_client_.get_con_from_hdl(hdl);
+		return con && con->get_state() == websocketpp::session::state::open;
+	} catch (const std::exception& e) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection_is_open : exception=%s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
+	} catch (...) {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "connection_is_open : unknown exception uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+	}
+	return false;
+}
+
 bool wssclient::send_request_frame(websocketpp::connection_hdl hdl, char *buf, int buflen)
 {
 	// 参数验证
@@ -886,26 +917,7 @@ bool wssclient::send_request_frame(websocketpp::connection_hdl hdl, char *buf, i
 	}
 	
 	try {
-		client::connection_ptr con;
-		try {
-			con = ws_client_.get_con_from_hdl(hdl);
-		} catch (const std::exception& e) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_request_frame : get_con_from_hdl std::exception: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
-			m_exit_ = 2;
-			return false;
-		} catch (...) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_request_frame : get_con_from_hdl unknown exception uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			m_exit_ = 2;
-			return false;
-		}
-		
-		if (!con) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_request_frame : connection is null uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			m_exit_ = 2;
-			return false;
-		}
-		
-		if (con->get_state() != websocketpp::session::state::open) {
+		if (!connection_is_open(hdl)) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_request_frame : connection not open uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 			m_exit_ = 2;
 			return false;
@@ -924,7 +936,11 @@ bool wssclient::send_request_frame(websocketpp::connection_hdl hdl, char *buf, i
 			return false;
 		}
 		
-		ws_client_.send(hdl, data.data(), data.size(), websocketpp::frame::opcode::BINARY, ec);
+		if (use_tls_) {
+			tls_client_.send(hdl, data.data(), data.size(), websocketpp::frame::opcode::BINARY, ec);
+		} else {
+			plain_client_.send(hdl, data.data(), data.size(), websocketpp::frame::opcode::BINARY, ec);
+		}
 		if (ec) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "send_request_frame : send error=%s uuid[%s] bufidx[%d]\n", ec.message().c_str(), uuid_.c_str(), bufidx_);
 			m_exit_ = 2;
@@ -951,7 +967,11 @@ void wssclient::run()
 	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wssclient run uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 	try
 	{
-		ws_client_.run();
+		if (use_tls_) {
+			tls_client_.run();
+		} else {
+			plain_client_.run();
+		}
 	}
 	catch (websocketpp::exception &e)
 	{
@@ -963,11 +983,53 @@ void wssclient::run()
 	}
 }
 
+static bool myasr_url_has_scheme(const std::string &uri, const char *scheme)
+{
+	size_t scheme_len = strlen(scheme);
+	if (uri.size() < scheme_len)
+	{
+		return false;
+	}
+
+	for (size_t i = 0; i < scheme_len; i++)
+	{
+		if (std::tolower((unsigned char)uri[i]) != std::tolower((unsigned char)scheme[i]))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
 bool wssclient::open_connection(const std::string &uri, volatile int *connected)
 {
 	try {
 		websocketpp::lib::error_code ec;
-		client::connection_ptr con = ws_client_.get_connection(uri, ec);
+		if (myasr_url_has_scheme(uri, "wss://")) {
+			use_tls_ = true;
+		} else if (myasr_url_has_scheme(uri, "ws://")) {
+			use_tls_ = false;
+		} else {
+			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wssclient unsupported websocket uri scheme uri=%s uuid[%s] bufidx[%d]\n", uri.c_str(), uuid_.c_str(), bufidx_);
+			if (connected) {
+				*connected = -1;
+			}
+			return false;
+		}
+
+		if (use_tls_) {
+			tls_client::connection_ptr con = tls_client_.get_connection(uri, ec);
+			if (!ec) {
+				con->set_open_handshake_timeout(5000);
+				tls_client_.connect(con);
+			}
+		} else {
+			plain_client::connection_ptr con = plain_client_.get_connection(uri, ec);
+			if (!ec) {
+				con->set_open_handshake_timeout(5000);
+				plain_client_.connect(con);
+			}
+		}
 		if (ec)
 		{
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wssclient connection initialized failed-%s \n", ec.message().c_str());
@@ -987,12 +1049,7 @@ bool wssclient::open_connection(const std::string &uri, volatile int *connected)
 			connected_ = NULL;
 		}
 
-		// 设置连接超时
-		con->set_open_handshake_timeout(5000); // 5秒超时
-		
-		ws_client_.connect(con);
-
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wssclient start connecting uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "wssclient start connecting scheme=%s uuid[%s] bufidx[%d]\n", use_tls_ ? "wss" : "ws", uuid_.c_str(), bufidx_);
 		return true;
 	}
 	catch (const std::exception& e) {
@@ -1022,7 +1079,11 @@ void wssclient::close_connection()
 		// 检查连接句柄是否有效
 		if (!hdl_.expired()) {
 			int close_code = websocketpp::close::status::normal;
-			ws_client_.close(hdl_, close_code, "");
+			if (use_tls_) {
+				tls_client_.close(hdl_, close_code, "");
+			} else {
+				plain_client_.close(hdl_, close_code, "");
+			}
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "close_connection : uuid[%s] bufidx[%d] end\n", uuid_.c_str(), bufidx_);
 		} else {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "close_connection : uuid[%s] bufidx[%d] handle already expired\n", uuid_.c_str(), bufidx_);
@@ -1051,7 +1112,11 @@ void wssclient::stop_io_service()
 {
 	try
 	{
-		ws_client_.stop();
+		if (use_tls_) {
+			tls_client_.stop();
+		} else {
+			plain_client_.stop();
+		}
 	}
 	catch (websocketpp::exception &e)
 	{
@@ -1134,16 +1199,26 @@ void wssclient::on_close(websocketpp::connection_hdl hdl)
 	try {
 		m_exit_ = 1;
 
-		client::connection_ptr con = ws_client_.get_con_from_hdl(hdl);
-		if (!con) {
-			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "on_close : null connection uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
-			return;
-		}
-
 		std::stringstream s;
-		s << "close code: " << con->get_remote_close_code() << " ("
-		  << websocketpp::close::status::get_string(con->get_remote_close_code())
-		  << "), close reason: " << con->get_remote_close_reason();
+		if (use_tls_) {
+			tls_client::connection_ptr con = tls_client_.get_con_from_hdl(hdl);
+			if (!con) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "on_close : null tls connection uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+				return;
+			}
+			s << "close code: " << con->get_remote_close_code() << " ("
+			  << websocketpp::close::status::get_string(con->get_remote_close_code())
+			  << "), close reason: " << con->get_remote_close_reason();
+		} else {
+			plain_client::connection_ptr con = plain_client_.get_con_from_hdl(hdl);
+			if (!con) {
+				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "on_close : null plain connection uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+				return;
+			}
+			s << "close code: " << con->get_remote_close_code() << " ("
+			  << websocketpp::close::status::get_string(con->get_remote_close_code())
+			  << "), close reason: " << con->get_remote_close_reason();
+		}
 
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_close :[%s] uuid[%s] bufidx[%d]\n", s.str().c_str(), uuid_.c_str(), bufidx_);
 	} catch (const std::exception& e) {
@@ -1179,7 +1254,11 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 		
 		// 安全停止WebSocket客户端
 		try {
-			ws_client_.stop();
+			if (use_tls_) {
+				tls_client_.stop();
+			} else {
+				plain_client_.stop();
+			}
 		} catch (const websocketpp::exception& e) {
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "on_fail : websocketpp::exception stopping client: %s uuid[%s] bufidx[%d]\n", e.what(), uuid_.c_str(), bufidx_);
 		} catch (const std::exception& e) {
@@ -1205,9 +1284,15 @@ void wssclient::on_fail(websocketpp::connection_hdl hdl)
 	}
 }
 
-void wssclient::on_message(websocketpp::connection_hdl hdl, message_ptr msg)
+void wssclient::on_tls_message(websocketpp::connection_hdl hdl, tls_message_ptr msg)
 {
-	//	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_message : uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+	//	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_tls_message : uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
+	recv_asr_realtime_msg(msg->get_payload());
+}
+
+void wssclient::on_plain_message(websocketpp::connection_hdl hdl, plain_message_ptr msg)
+{
+	//	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "on_plain_message : uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 	recv_asr_realtime_msg(msg->get_payload());
 }
 
@@ -1268,8 +1353,7 @@ void wssclient::work_thread()
 		bool connection_valid = false;
 		try {
 			if (!hdl_.expired()) {
-				client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
-				if (con && con->get_state() == websocketpp::session::state::open) {
+				if (connection_is_open(hdl_)) {
 					connection_valid = true;
 				} else {
 					switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not in open state uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
@@ -1346,8 +1430,7 @@ void wssclient::work_thread()
 
 					if (temp_len > 0 && !hdl_.expired()) {
 						try {
-							client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
-							if (con && con->get_state() == websocketpp::session::state::open) {
+							if (connection_is_open(hdl_)) {
 								asr_params_.req_idx = req_idx++;
 								if (is_last_audio_packet)
 								{
@@ -1383,8 +1466,7 @@ void wssclient::work_thread()
 				// 安全发送结束信号
 				if (m_exit_ != 2 && !hdl_.expired()) {
 					try {
-						client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
-						if (con && con->get_state() == websocketpp::session::state::open) {
+						if (connection_is_open(hdl_)) {
 							const char *end_signal = "{\"end\": true}";
 							char *end_data = const_cast<char *>(end_signal);
 							size_t end_len = std::strlen(end_signal);
@@ -1424,8 +1506,7 @@ void wssclient::work_thread()
 				}
 
 				try {
-					client::connection_ptr con = ws_client_.get_con_from_hdl(hdl_);
-					if (!con || con->get_state() != websocketpp::session::state::open) {
+					if (!connection_is_open(hdl_)) {
 						switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "work_thread : connection not open during audio processing uuid[%s] bufidx[%d]\n", uuid_.c_str(), bufidx_);
 						m_exit_ = 2;
 						break;
@@ -1644,7 +1725,7 @@ static void *wss_client_run(void *arg)
 	char *appid = globals.app_id;
 	char *key = globals.app_key;
 	if (zstr(appid) || zstr(key) || zstr(globals.wss_url)) {
-		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run missing config appid/key/wss_url bufidx=%d\n", local_bufidx);
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "wss_client_run missing config appid/key/ws_url or wss_url bufidx=%d\n", local_bufidx);
 		wud->connected = -1;
 		__sync_sub_and_fetch(&g_wss_thread_count, 1);
 		myasr_wud_release(wud);
