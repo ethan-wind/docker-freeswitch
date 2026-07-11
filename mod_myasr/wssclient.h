@@ -23,6 +23,7 @@
 #include <websocketpp/client.hpp>
 #include <string>
 #include <list>
+#include <atomic>
 #include <pthread.h>
 
 typedef websocketpp::client<websocketpp::config::asio_tls_client> client;
@@ -77,11 +78,13 @@ public:
     wssclient(const asr_params &params);
     virtual ~wssclient();
     void run();
-    bool open_connection(const std::string &uri, volatile int *connected = NULL);
+    bool open_connection(const std::string &uri, int *connected = NULL);
     // void send_request_frame(websocketpp::connection_hdl hdl, const std::string& data);
     bool send_request_frame(websocketpp::connection_hdl hdl, char *data, int datalen);
     void stop_io_service();
     void close_connection();
+    bool get_connection_hdl(websocketpp::connection_hdl *hdl);
+    void cleanup_work_thread();
 
 protected:
     context_ptr on_tls_init(websocketpp::connection_hdl);
@@ -108,9 +111,12 @@ public:
     std::string uuid_;
     std::string leg_;
     int bufidx_;
+    uint64_t generation_;
     time_t timeout_;
-    int m_exit_;     //-1 init 1 exit, 0 run
-    volatile int *connected_; // 0 not connected, 1 connected
+    std::atomic<int> m_exit_; // -1 init, 0 running, 1/2 exit
+    std::atomic<int> work_thread_ready_;
+    int *connected_; // Accessed with atomic builtins across threads.
+    int *session_ready_;
     pthread_t work_thread_id_; // 工作线程ID用于清理
 };
 
