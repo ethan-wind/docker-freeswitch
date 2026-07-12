@@ -26,7 +26,7 @@ echo "FreeSWITCH 头文件：${FREESWITCH_INCLUDE_PATH}"
 echo "FreeSWITCH 库目录：${FREESWITCH_LIB_PATH}"
 echo "WebSocket++ 头文件：${WEBSOCKETPP_INCLUDE_PATH}"
 
-"${CXX}" -std=c++11 -shared -fPIC -o "${OUTPUT}" \
+"${CXX}" -std=c++11 -Wno-deprecated-declarations -shared -fPIC -o "${OUTPUT}" \
     httpclient.cpp mod_myasr.cpp \
     -pthread \
     -I"${FREESWITCH_INCLUDE_PATH}" \
