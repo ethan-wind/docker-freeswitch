@@ -37,7 +37,7 @@ extern "C"
 #define MAX_PAYLOAD_SIZE 1280 // 1280
 #define MAX_USER_CHANNEL 10000
 #define MYASR_AUDIO_QUEUE_SIZE 8
-#define MYASR_TARGET_SAMPLE_RATE 16000
+#define MYASR_TARGET_SAMPLE_RATE 8000
 #define MYASR_CHANNEL_FREE 0
 #define MYASR_CHANNEL_RUNNING 1
 #define MYASR_CHANNEL_STOPPING 2
@@ -1819,7 +1819,9 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 	if (!bug)
 		return SWITCH_TRUE;
 	switch_codec_implementation_t read_impl;
+	/* 禁用重采样，直接推送 8K PCM。
 	switch_status_t status;
+	*/
 	switch_core_session_t *session = switch_core_media_bug_get_session(bug);
 	if (!session)
 	{
@@ -1833,6 +1835,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 	{
 		switch_core_session_get_read_impl(session, &read_impl);
 		ud->read_sample_rate = read_impl.actual_samples_per_second;
+		/* 禁用重采样，直接推送 8K PCM。
 		status = switch_resample_create(&ud->resampler, read_impl.actual_samples_per_second, MYASR_TARGET_SAMPLE_RATE, 640, SWITCH_RESAMPLE_QUALITY, 1);
 		if (status != SWITCH_STATUS_SUCCESS)
 		{
@@ -1840,6 +1843,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 			switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unable to allocate resampler from %u to %d\n",
 							  ud->read_sample_rate, MYASR_TARGET_SAMPLE_RATE);
 		}
+		*/
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "myasr callback : init aleg_idx=%d aleg_uuid=%s input_rate=%u target_rate=%d\n",
 						  aleg_idx, ud->aleg_uuid, ud->read_sample_rate, MYASR_TARGET_SAMPLE_RATE);
 	}
