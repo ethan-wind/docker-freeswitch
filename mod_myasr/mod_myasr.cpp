@@ -1892,7 +1892,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 			size_t frame_len = 0;
 			if (myasr_get_frame_audio_16k(ud, &frame, &frame_data, &frame_len))
 			{
-				myasr_append_audio_buffer(ud, aleg_idx, frame_data, frame_len);
+				myasr_append_audio_buffer(ud, aleg_idx, ud->generation, frame_data, frame_len);
 			}
 		}
 	}
@@ -1917,7 +1917,7 @@ static switch_bool_t myasr_callback(switch_media_bug_t *bug, void *userdata, swi
 			size_t frame_len = 0;
 			if (myasr_get_frame_audio_16k(ud, &frame, &frame_data, &frame_len))
 			{
-				myasr_append_audio_buffer(ud, aleg_idx, frame_data, frame_len);
+				myasr_append_audio_buffer(ud, aleg_idx, ud->generation, frame_data, frame_len);
 			}
 		}
 	}
