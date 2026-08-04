@@ -442,8 +442,8 @@ wssclient::wssclient(const asr_params &params)
 	// 初始化pthread_mutex_t
 	pthread_mutex_init(&hdl_mutex_, NULL);
 	
-	ws_client_.set_access_channels(websocketpp::log::alevel::all);
-	ws_client_.clear_access_channels(websocketpp::log::alevel::frame_payload);
+	// Disable per-frame WebSocket access logs; retain error logs below.
+	ws_client_.clear_access_channels(websocketpp::log::alevel::all);
 	ws_client_.set_error_channels(websocketpp::log::elevel::all);
 
 	ws_client_.init_asio();
@@ -494,7 +494,6 @@ string wssclient::gen_json_request(const std::string &token, const asr_params &p
 
 void wssclient::recv_asr_realtime_msg(const std::string &msg)
 {
-	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "uuid[%s] bufidx[%d] recv asr message = %s\n", uuid_.c_str(), bufidx_, msg.c_str());
 	if (msg.empty())
 	{
 		return;
